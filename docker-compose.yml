@@ -1,0 +1,43 @@
+# docker-compose.yml — lokala tjänster för utveckling.
+# Startar PostgreSQL (databas) och Redis (sessioner + jobbkö) i containrar.
+# Starta:  docker compose up -d
+# Stoppa:  docker compose down   (datan finns kvar i volymerna)
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: fakturly_db
+    restart: always
+    environment:
+      POSTGRES_USER: devinder
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: fakturly
+    ports:
+      - '5432:5432'
+    volumes:
+      # Sparar databasfilerna på disk så datan överlever omstart
+      - fakturly_db_data:/var/lib/postgresql/data
+    healthcheck:
+      # Låter Docker veta när databasen faktiskt är redo att ta emot anslutningar
+      test: ['CMD-SHELL', 'pg_isready -U devinder -d fakturly']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: fakturly_redis
+    restart: always
+    ports:
+      - '6379:6379'
+    volumes:
+      - fakturly_redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  fakturly_db_data:
+  fakturly_redis_data:

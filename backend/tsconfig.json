@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    // Modern JS-mål — Bun kör senaste JavaScript
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+
+    // Tillåt import av .ts-filer direkt (Bun kör TypeScript utan bygg).
+    // Kräver noEmit: true (vi har det längre ner).
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+
+    // Strikt läge — fångar buggar innan koden körs. Ingen "any".
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+
+    // Extra kvalitetskontroller
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // Bun-specifikt: vi kör TS direkt, ingen output
+    "noEmit": true,
+
+    // Låt oss använda t.ex. JSON-import och moderna bibliotek
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+
+    // Bun tillhandahåller sina egna typer
+    "types": ["node"],
+    "lib": ["ESNext"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,153 @@
+// schema.prisma — databasens sanning (source of truth).
+// Här beskriver vi alla tabeller. Prisma genererar en typsäker klient
+// och skapar migrationer (versionerad SQL) från den här filen.
+
+generator client {
+  provider     = "prisma-client" // Prisma 7: nya generatorn (utan -js), ESM-vänlig
+  output       = "../src/generated/prisma" // krävs i Prisma 7 — genererad kod hamnar här
+  moduleFormat = "esm" // vi kör ES Modules (import/export), passar Bun
+}
+
+datasource db {
+  provider = "postgresql"
+  // Prisma 7: ingen url här längre. URL:en bor i prisma.config.ts (för CLI/migrationer)
+  // och i driver-adaptern (för runtime, se src/lib/prisma.ts senare).
+}
+
+// ─────────────────────────────────────────────────────────────
+// Användare & roller
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  password     String // bcrypt-hash — aldrig lösenord i klartext
+  role         Role       @default(CLIENT)
+  failedLogins Int        @default(0) // räknar misslyckade inloggningar
+  lockedUntil  DateTime? // konto låst till denna tidpunkt
+  client       Client?
+  auditLogs    AuditLog[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+enum Role {
+  ADMIN
+  CLIENT
+}
+
+// ─────────────────────────────────────────────────────────────
+// Kunder
+// ─────────────────────────────────────────────────────────────
+
+model Client {
+  id        String    @id @default(cuid())
+  name      String
+  email     String
+  phone     String?
+  address   String?
+  userId    String    @unique
+  user      User      @relation(fields: [userId], references: [id])
+  invoices  Invoice[]
+  createdAt DateTime  @default(now())
+}
+
+// ─────────────────────────────────────────────────────────────
+// Fakturor — raderas ALDRIG, endast status ändras
+// ─────────────────────────────────────────────────────────────
+
+model Invoice {
+  id              String        @id @default(cuid())
+  invoiceNumber   String        @unique
+  clientId        String
+  client          Client        @relation(fields: [clientId], references: [id])
+  amount          Int // öre (1 SEK = 100 öre) — ALDRIG Float för pengar
+  currency        String        @default("SEK")
+  status          InvoiceStatus @default(DRAFT)
+  dueDate         DateTime
+  paidAt          DateTime?
+  lateFeeOre      Int           @default(0) // förseningsavgift, också i öre
+  stripePaymentId String?
+  idempotencyKey  String?       @unique // hindrar dubbla betalningar
+  items           InvoiceItem[]
+  transactions    Transaction[]
+  emailLogs       EmailLog[]
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+}
+
+model InvoiceItem {
+  id           String  @id @default(cuid())
+  invoiceId    String
+  invoice      Invoice @relation(fields: [invoiceId], references: [id])
+  description  String
+  quantity     Int
+  unitPriceOre Int // styckpris i öre
+  totalOre     Int // radtotal i öre
+}
+
+// ─────────────────────────────────────────────────────────────
+// Transaktioner — IMMUTABLE. Uppdatera/radera aldrig. Nytt event = ny rad.
+// ─────────────────────────────────────────────────────────────
+
+model Transaction {
+  id          String          @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice         @relation(fields: [invoiceId], references: [id])
+  type        TransactionType
+  amountOre   Int // belopp i öre
+  currency    String          @default("SEK")
+  description String
+  createdAt   DateTime        @default(now())
+  // Inget updatedAt — transaktioner är oföränderliga
+}
+
+enum TransactionType {
+  INVOICE_CREATED
+  PAYMENT_RECEIVED
+  LATE_FEE_ADDED
+  REFUND
+  ADJUSTMENT
+}
+
+// ─────────────────────────────────────────────────────────────
+// E-postloggar
+// ─────────────────────────────────────────────────────────────
+
+model EmailLog {
+  id        String    @id @default(cuid())
+  invoiceId String
+  invoice   Invoice   @relation(fields: [invoiceId], references: [id])
+  type      EmailType
+  sentAt    DateTime  @default(now())
+}
+
+enum EmailType {
+  INVOICE_SENT
+  REMINDER
+  OVERDUE_NOTICE
+  PAYMENT_CONFIRMED
+}
+
+// ─────────────────────────────────────────────────────────────
+// Revisionslogg (audit log) — raderas ALDRIG, lagkrav
+// ─────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  action     String // t.ex. 'CREATE_INVOICE', 'LOGIN'
+  resource   String // t.ex. 'Invoice', 'Client', 'User'
+  resourceId String? // vilken specifik rad som påverkades
+  ipAddress  String? // varifrån requesten kom
+  userAgent  String? // vilken webbläsare/klient
+  createdAt  DateTime @default(now())
+}

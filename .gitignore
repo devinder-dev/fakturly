@@ -1,0 +1,34 @@
+# Beroenden (dependencies) — installeras om från package.json, committa aldrig
+node_modules/
+
+# Miljövariabler / hemligheter — får ALDRIG hamna i git
+.env
+.env.local
+.env.*.local
+
+# Byggd kod (build output)
+dist/
+build/
+*.tsbuildinfo
+
+# Loggar
+*.log
+npm-debug.log*
+bun-debug.log*
+
+# OS-skräp (operativsystem-filer)
+.DS_Store
+Thumbs.db
+
+# Editor-inställningar
+.vscode/
+.idea/
+
+# Testtäckning (coverage)
+coverage/
+
+# Interna projektanteckningar — ska ALDRIG synas på GitHub
+CLAUDE.md
+
+# Prisma genererad klient — genereras från schema.prisma, committa inte
+backend/src/generated/
