@@ -19,16 +19,17 @@ datasource db {
 // ─────────────────────────────────────────────────────────────
 
 model User {
-  id           String     @id @default(cuid())
-  email        String     @unique
-  password     String // bcrypt-hash — aldrig lösenord i klartext
-  role         Role       @default(CLIENT)
-  failedLogins Int        @default(0) // räknar misslyckade inloggningar
-  lockedUntil  DateTime? // konto låst till denna tidpunkt
-  client       Client?
-  auditLogs    AuditLog[]
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  id            String         @id @default(cuid())
+  email         String         @unique
+  password      String // Argon2id-hash — aldrig lösenord i klartext
+  role          Role           @default(CLIENT)
+  failedLogins  Int            @default(0) // räknar misslyckade inloggningar
+  lockedUntil   DateTime? // konto låst till denna tidpunkt
+  client        Client?
+  auditLogs     AuditLog[]
+  refreshTokens RefreshToken[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
 }
 
 enum Role {
@@ -141,13 +142,71 @@ enum EmailType {
 // ─────────────────────────────────────────────────────────────
 
 model AuditLog {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id])
-  action     String // t.ex. 'CREATE_INVOICE', 'LOGIN'
+  id String @id @default(cuid())
+
+  // VALFRI (optional) — och det är hela poängen.
+  // Ett misslyckat inloggningsförsök mot en e-post som INTE finns har
+  // ingen användare att peka på. Just de försöken är det viktigaste vi
+  // loggar: det är så man upptäcker credential stuffing (någon testar
+  // läckta lösenord mot tusentals konton). Med userId som obligatorisk
+  // gick de händelserna inte att spara alls.
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  // Vilken e-post som FÖRSÖKTES, när ingen användare matchade.
+  email String?
+
+  action     String // t.ex. 'LOGIN_SUCCESS', 'LOGIN_FAILED', 'CREATE_INVOICE'
   resource   String // t.ex. 'Invoice', 'Client', 'User'
   resourceId String? // vilken specifik rad som påverkades
   ipAddress  String? // varifrån requesten kom
   userAgent  String? // vilken webbläsare/klient
   createdAt  DateTime @default(now())
+
+  // Index = uppslagstabeller som gör sökningar snabba.
+  // Utan dem måste Postgres läsa HELA tabellen, och en audit-logg
+  // växer för alltid (den raderas aldrig — lagkrav).
+  @@index([userId, createdAt]) // "visa allt användare X gjort"
+  @@index([action, createdAt]) // "visa alla misslyckade inloggningar senaste timmen"
+  @@index([email, createdAt]) // "attackeras den här e-posten?"
+}
+
+// ─────────────────────────────────────────────────────────────
+// Refresh tokens — långlivade tokens som ger nya access-tokens
+// ─────────────────────────────────────────────────────────────
+
+model RefreshToken {
+  id String @id @default(cuid())
+
+  // Vi sparar en SHA-256-HASH, aldrig själva token.
+  // Läcker databasen kan ingen logga in med innehållet.
+  //
+  // Varför SHA-256 här men Argon2id för lösenord? Matcha hashen mot
+  // entropin i det du hashar. En refresh token är 256 slumpbitar från
+  // en CSPRNG — det finns ingenting att gissa, så en långsam hash ger
+  // noll extra säkerhet men gör varje refresh dyr. Ett lösenord är
+  // människovalt och gissningsbart — där ÄR långsamheten hela poängen.
+  tokenHash String @unique
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  // Alla tokens som härstammar från EN inloggning delar familj.
+  // Upptäcker vi stöld river vi hela familjen på en gång.
+  familyId String
+
+  expiresAt DateTime
+  rotatedAt DateTime? // sattes när denna token byttes mot ett nytt par
+  revokedAt DateTime? // spärrad (utloggning eller upptäckt stöld)
+
+  // Forensik: varifrån kom den? Skiljer sig IP mellan utfärdande och
+  // användning är det en stark signal om att något är fel.
+  createdByIp String?
+  userAgent   String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt]) // för städjobbet som rensar utgångna tokens
 }
