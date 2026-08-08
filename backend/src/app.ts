@@ -5,6 +5,7 @@
 
 import Fastify, { type FastifyInstance } from 'fastify'
 import { isProduction } from './lib/env.ts'
+import errorHandlerPlugin from './plugins/errorHandler.ts'
 import prismaPlugin from './plugins/prisma.ts'
 import redisPlugin from './plugins/redis.ts'
 
@@ -35,7 +36,11 @@ export function buildApp(): FastifyInstance {
     trustProxy: isProduction
   })
 
-  // Infrastruktur först — rutter behöver databas och Redis.
+  // Felhanteraren FÖRST. Registreras den efter rutterna hinner Fastify
+  // använda sin egen standardhanterare för allt som kastas innan dess.
+  app.register(errorHandlerPlugin)
+
+  // Sedan infrastruktur — rutter behöver databas och Redis.
   app.register(prismaPlugin)
   app.register(redisPlugin)
 
