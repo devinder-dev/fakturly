@@ -27,8 +27,12 @@ Thumbs.db
 # Testtäckning (coverage)
 coverage/
 
-# Interna projektanteckningar — ska ALDRIG synas på GitHub
+# Interna projektanteckningar och AI-verktygskonfiguration
+# — ska ALDRIG synas på GitHub
 CLAUDE.md
+CLAUDE.local.md
+.claude/
+.mcp.json
 
 # Prisma genererad klient — genereras från schema.prisma, committa inte
 backend/src/generated/
