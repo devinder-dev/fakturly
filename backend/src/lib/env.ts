@@ -18,8 +18,16 @@ const envSchema = z.object({
 
   // Auth — at least 32 characters. A short secret can be guessed or brute-forced.
   JWT_SECRET: z.string().min(32, 'JWT_SECRET måste vara minst 32 tecken'),
-  // How long an access token stays valid. Short = less damage if it leaks.
-  JWT_EXPIRES_IN: z.string().default('1h'),
+
+  // Access token lifetime. Short on purpose: a stolen access token cannot be
+  // revoked instantly (we check a denylist, but only on our own routes), so
+  // its own expiry is the real backstop.
+  ACCESS_TOKEN_MINUTES: z.coerce.number().int().positive().default(15),
+
+  // Refresh token lifetime — how long a user stays logged in without
+  // re-entering a password. Safe to be long because every use rotates it and
+  // reuse of a spent token revokes the whole family.
+  REFRESH_TOKEN_DAYS: z.coerce.number().int().positive().default(30),
 
   // App. coerce: "3000" arrives as a string, we want a number.
   PORT: z.coerce.number().int().positive().default(3000),
