@@ -5,7 +5,9 @@
 import { buildApp } from './app.ts'
 import { env } from './lib/env.ts'
 
-const app = buildApp()
+// await: buildApp laddar plugin-en klart innan rutterna deklareras,
+// annars registreras rutter innan plugin-ens hookar finns på plats.
+const app = await buildApp()
 
 // try/catch så att vi loggar tydligt om uppstarten misslyckas.
 try {

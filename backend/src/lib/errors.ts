@@ -142,7 +142,12 @@ export class RateLimitError extends AppError {
   readonly retryAfterSeconds: number
 
   constructor(retryAfterSeconds: number) {
-    super('För många försök. Försök igen senare.', 429, 'RATE_LIMITED')
+    // retryAfterSeconds ligger BÅDE i Retry-After-headern (standarden, som
+    // HTTP-klienter förstår automatiskt) och i body:n (så att en frontend
+    // kan visa "försök igen om 42 sekunder" utan att läsa headers).
+    super('För många försök. Försök igen senare.', 429, 'RATE_LIMITED', {
+      details: { retryAfterSeconds }
+    })
     this.retryAfterSeconds = retryAfterSeconds
   }
 }

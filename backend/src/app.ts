@@ -7,11 +7,24 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { isProduction } from './lib/env.ts'
 import errorHandlerPlugin from './plugins/errorHandler.ts'
 import prismaPlugin from './plugins/prisma.ts'
+import rateLimitPlugin from './plugins/rateLimit.ts'
 import redisPlugin from './plugins/redis.ts'
 
 // buildApp skapar en färsk app varje gång den anropas.
 // I tester vill vi ha en ny, ren app per test — därför en funktion.
-export function buildApp(): FastifyInstance {
+//
+// VARFÖR ASYNC? app.register() laddar inte plugin-et direkt — den lägger
+// det i kö och kör det först vid app.ready(). Deklarerar vi en route på
+// raden efter en oväntad register() hinner routen skapas INNAN plugin-et
+// har hunnit lägga till sina onRoute-hookar.
+//
+// Det bet oss på riktigt: @fastify/rate-limit läser route-ens
+// config.rateLimit i en onRoute-hook. Utan await registrerades /health och
+// auth-rutterna före hooken fanns — och rate limiting blev en tyst
+// no-op. Inget fel, ingen varning, bara inget skydd.
+//
+// Med await är plugin-et färdigladdat innan första routen deklareras.
+export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
     // I produktion vill vi ha JSON-loggar (maskinläsbara, för loggverktyg).
     // I utveckling vill vi ha läsbar text — men pino-pretty installerar vi
@@ -38,11 +51,21 @@ export function buildApp(): FastifyInstance {
 
   // Felhanteraren FÖRST. Registreras den efter rutterna hinner Fastify
   // använda sin egen standardhanterare för allt som kastas innan dess.
-  app.register(errorHandlerPlugin)
+  await app.register(errorHandlerPlugin)
 
   // Sedan infrastruktur — rutter behöver databas och Redis.
-  app.register(prismaPlugin)
-  app.register(redisPlugin)
+  await app.register(prismaPlugin)
+  await app.register(redisPlugin)
+
+  // Rate limiting EFTER redis — den använder app.redis som sin räknare.
+  // dependencies: ['redis'] i plugin-et gör att Fastify vägrar starta
+  // om ordningen någonsin kastas om, istället för att krascha vid första
+  // requesten i produktion.
+  await app.register(rateLimitPlugin)
+
+  // ── Först HÄR får rutter deklareras ────────────────────────────
+  // Allt ovanför är färdigladdat, så varje route nedan ser samtliga
+  // hookar (rate limit, felhantering) från första sekunden.
 
   // Hälsokontroll (health check) — verifierar att appen lever.
   app.get('/health', async () => {
