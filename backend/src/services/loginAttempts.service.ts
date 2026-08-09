@@ -1,44 +1,44 @@
-// loginAttempts.service.ts — lager 2: begränsning per KONTO.
+// loginAttempts.service.ts — layer 2: limiting per ACCOUNT.
 //
-// Fångar det per-IP missar: password spraying. En angripare tar ett vanligt
-// lösenord ("Sommar2026!") och testar det EN gång mot 50 000 konton. Varje
-// konto ser ett misslyckat försök, varje IP i botnätet ser en handfull.
-// Ingen per-IP-räknare slår till. En per-konto-räknare gör det.
+// Catches what per-IP misses: distributed brute force. A botnet targeting one
+// high-value account sends two attempts per IP across hundreds of addresses.
+// No IP counter ever fires — but all those attempts hit ONE account, and an
+// account counter stops them at five.
 //
-// ── Den subtila fällan ───────────────────────────────────────────
-// Vi räknar försök för VARJE inskickad e-postadress — även adresser som
-// inte finns. Räknade vi bara riktiga konton skulle en existerande adress
-// bli långsammare och långsammare medan en okänd svarar direkt. Den
-// skillnaden är exakt den enumeration vi byggde bort i steg 1.
+// ── The subtle trap ──────────────────────────────────────────────
+// We count attempts for EVERY submitted email address — including ones that
+// do not exist. If we only counted real accounts, an existing address would
+// get slower and slower while an unknown one answered instantly. That
+// difference is exactly the enumeration oracle we removed in step 1.
 //
-// Tar en service emot `request`? Nej. Den tar vanliga argument, så att
-// samma logik går att anropa från en BullMQ-worker eller ett test.
+// Does this service take `request`? No. It takes plain arguments, so the same
+// logic can be called from a BullMQ worker or a test.
 
 import { createHash } from 'node:crypto'
 import { redis } from '../lib/redis.ts'
 import { RateLimitError } from '../lib/errors.ts'
 
-/** Fönstret som misslyckade försök räknas inom. */
-const WINDOW_SECONDS = 15 * 60 // 15 minuter
+/** The window within which failed attempts are counted. */
+const WINDOW_SECONDS = 15 * 60 // 15 minutes
 
-/** Antal misslyckanden innan kontot spärras för resten av fönstret. */
+/** Failures allowed before the account is blocked for the rest of the window. */
 export const MAX_ATTEMPTS = 5
 
-/** De två första försöken är gratis — folk skriver fel ibland. */
+/** The first two attempts are free — people do mistype their own password. */
 const FREE_ATTEMPTS = 2
 
-/** Basfördröjning. Växer sedan med faktor 4 per försök. */
+/** Base delay. Grows by a factor of 4 per subsequent attempt. */
 const DELAY_BASE_MS = 100
 
-/** Tak på fördröjningen, annars binder vi upp våra egna anslutningar. */
+/** Cap on the delay, otherwise we tie up our own connections. */
 const DELAY_MAX_MS = 5000
 
 /**
- * Nyckeln innehåller en HASH av e-postadressen, inte adressen själv.
+ * The key holds a HASH of the email address, not the address itself.
  *
- * Två skäl: vi vill inte strö kundernas e-postadresser över Redis (som
- * kan dumpas, loggas eller inspekteras), och en hash har alltid samma
- * längd — någon kan annars skicka in en 900 tecken lång "adress".
+ * Two reasons: we do not want customer email addresses scattered across Redis
+ * (which can be dumped, logged or inspected), and a hash has a fixed length —
+ * otherwise someone submits a 900-character "address" as a key.
  */
 function attemptsKey(email: string): string {
   const digest = createHash('sha256').update(email.toLowerCase()).digest('hex')
@@ -46,19 +46,19 @@ function attemptsKey(email: string): string {
 }
 
 /**
- * Progressiv fördröjning — bankernas riktiga lösning.
+ * Progressive delay — what banks actually do.
  *
- * Försök 1-2: 0 ms       (skrivfel ska inte straffas)
- * Försök 3:   100 ms
- * Försök 4:   400 ms
- * Försök 5:   1600 ms
- * ... upp till taket
+ * attempt 1-2: 0 ms       (typos should not be punished)
+ * attempt 3:   100 ms
+ * attempt 4:   400 ms
+ * attempt 5:   1600 ms
+ * ... up to the cap
  *
- * Varför inte bara spärra direkt? För att ren utelåsning är en
- * självförvållad DoS: vem som helst kan låsa DIG ute från ditt konto
- * genom att medvetet gissa fel fem gånger. Fördröjningen gör brute force
- * praktiskt omöjlig långt innan spärren behövs — 1000 gissningar tar
- * dagar istället för sekunder — utan att ge angriparen ett vapen.
+ * Why not just lock the account immediately? Because pure lockout is a
+ * self-inflicted DoS: anyone can lock YOU out of your own account by
+ * deliberately failing five times. The delay makes brute force impractical
+ * long before lockout is needed — 1000 guesses take days instead of seconds —
+ * without handing an attacker a weapon.
  */
 export function progressiveDelayMs(failedAttempts: number): number {
   if (failedAttempts <= FREE_ATTEMPTS) return 0
@@ -72,34 +72,34 @@ export async function getFailedAttempts(email: string): Promise<number> {
 }
 
 /**
- * Räknar upp ett misslyckat försök och returnerar den nya summan.
+ * Increments the failure count and returns the new total.
  *
- * INCR + EXPIRE i en pipeline = en enda tur- och returresa till Redis
- * istället för två. Vi sätter EXPIRE varje gång, så fönstret glider
- * framåt: fortsätter någon att gissa förblir kontot skyddat.
+ * INCR + EXPIRE in one pipeline = a single round trip to Redis instead of
+ * two. We set EXPIRE every time, so the window slides forward: as long as
+ * someone keeps guessing, the account stays protected.
  */
 export async function recordFailedAttempt(email: string): Promise<number> {
   const key = attemptsKey(email)
   const results = await redis.multi().incr(key).expire(key, WINDOW_SECONDS).exec()
 
-  // exec() ger [[err, value], ...]. Första posten är INCR-resultatet.
+  // exec() returns [[err, value], ...]. The first entry is the INCR result.
   const incrResult = results?.[0]
   if (!incrResult || incrResult[0]) return 0
   return Number(incrResult[1]) || 0
 }
 
-/** Nollställs vid lyckad inloggning — annars låser gamla fel ute en giltig användare. */
+/** Cleared on successful login — otherwise old failures lock out a valid user. */
 export async function clearFailedAttempts(email: string): Promise<void> {
   await redis.del(attemptsKey(email))
 }
 
 /**
- * Kastar RateLimitError om kontot har för många misslyckade försök.
- * Anropas FÖRST i inloggningsflödet, innan vi ens rör databasen.
+ * Throws RateLimitError if the account has too many failed attempts.
+ * Called FIRST in the login flow, before we even touch the database.
  *
- * Att svara 429 här läcker ingenting: vi räknar okända adresser också,
- * så en angripare kan inte skilja "spärrat konto" från "spärrad gissning
- * mot en adress som aldrig funnits".
+ * Returning 429 here leaks nothing: we count unknown addresses too, so an
+ * attacker cannot tell "blocked account" apart from "blocked guessing against
+ * an address that never existed".
  */
 export async function assertAccountNotLocked(email: string): Promise<void> {
   const attempts = await getFailedAttempts(email)
@@ -110,10 +110,10 @@ export async function assertAccountNotLocked(email: string): Promise<void> {
 }
 
 /**
- * Väntar den progressiva fördröjningen ut.
+ * Waits out the progressive delay.
  *
- * Anropas på misslyckad inloggning INNAN svaret skickas, så att
- * angriparens verktyg faktiskt tvingas vänta.
+ * Called on a failed login BEFORE the response is sent, so an attacker's
+ * tooling is actually forced to wait.
  */
 export async function applyProgressiveDelay(failedAttempts: number): Promise<void> {
   const delay = progressiveDelayMs(failedAttempts)

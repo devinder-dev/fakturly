@@ -1,12 +1,15 @@
-// plugins/errorHandler.ts — ENDA stället där ett fel blir ett HTTP-svar.
+// plugins/errorHandler.ts — the ONLY place where an error becomes an HTTP response.
 //
-// Allt som kastas någonstans i appen landar här. Uppgiften är dubbel:
-//   1. Logga ALLT vi vet, på servern
-//   2. Skicka MINIMALT till klienten
+// Everything thrown anywhere in the app lands here. The job is two-sided:
+//   1. Log EVERYTHING we know, on the server
+//   2. Send the MINIMUM to the client
 //
-// Den asymmetrin är hela poängen. Ett Prisma-fel innehåller ofta
-// "Unique constraint failed on the fields: (email)" — skickar vi det vidare
-// har vi just bekräftat för en angripare att adressen finns registrerad.
+// That asymmetry is the whole point. A Prisma error often contains
+// "Unique constraint failed on the fields: (email)" — forward that and we
+// have just confirmed to an attacker that the address is registered.
+//
+// User-facing messages stay in Swedish: they are shown to Swedish customers.
+// Comments and log messages are English, for whoever maintains this.
 
 import fp from 'fastify-plugin'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
@@ -15,24 +18,24 @@ import { Prisma } from '../generated/prisma/client.ts'
 import { AppError, RateLimitError, isAppError } from '../lib/errors.ts'
 import { isProduction } from '../lib/env.ts'
 
-/** Svarsformen är densamma för ALLA fel — klienten slipper gissa. */
+/** One response shape for EVERY error, so the client never has to guess. */
 type ErrorResponse = {
   error: {
     code: string
     message: string
-    /** requestId gör att användaren kan säga "fel req-42" och vi hittar raden. */
+    /** Lets a user say "error req-42" and we find the exact log line. */
     requestId: string
     details?: unknown
   }
 }
 
 /**
- * Läser ut statusCode/code/message ur ett okänt fel.
+ * Extracts statusCode/code/message from an unknown error.
  *
- * Fastify typar felet som `unknown` — vilket är korrekt: vem som helst kan
- * kasta vad som helst i JavaScript, även `throw 'sträng'`. Projektregeln
- * förbjuder `any`, så vi smalnar av med riktiga typkontroller istället för
- * att ljuga för kompilatorn med en cast.
+ * Fastify types the error as `unknown` — which is correct: JavaScript lets
+ * anyone throw anything, including `throw 'a string'`. The project rules ban
+ * `any`, so we narrow with real type checks rather than lying to the compiler
+ * with a cast.
  */
 function readErrorFields(error: unknown): {
   statusCode: number
@@ -68,17 +71,18 @@ function send(
 
 async function errorHandlerPlugin(app: FastifyInstance) {
   app.setErrorHandler((error, request, reply) => {
-    // ── 1. Våra egna domänfel — det förväntade fallet ──────────
+    // ── 1. Our own domain errors — the expected case ────────────
     if (isAppError(error)) {
-      // Låsta konton och felaktiga lösenord är inte buggar, men de är
-      // säkerhetshändelser. warn gör dem sökbara utan att larma om allt.
+      // Locked accounts and wrong passwords are not bugs, but they are
+      // security events. warn keeps them searchable without alerting on
+      // every single one.
       const level = error.statusCode >= 500 ? 'error' : 'warn'
       app.log[level](
         { err: error, code: error.code, statusCode: error.statusCode },
-        'Domänfel'
+        'Domain error'
       )
 
-      // 429 ska tala om NÄR man får försöka igen.
+      // A 429 must say WHEN the caller may try again.
       if (error instanceof RateLimitError) {
         reply.header('Retry-After', String(error.retryAfterSeconds))
       }
@@ -93,65 +97,65 @@ async function errorHandlerPlugin(app: FastifyInstance) {
       )
     }
 
-    // ── 2. Zod — indatat höll inte formen ──────────────────────
-    // Fältfel är säkra att visa: det är användarens EGET indata, och hen
-    // behöver veta vad som var fel för att kunna rätta det.
+    // ── 2. Zod — the input did not match the schema ─────────────
+    // Field errors are safe to return: this is the caller's OWN input, and
+    // they need to know what was wrong in order to fix it.
     if (error instanceof ZodError) {
       const details = error.issues.map((issue) => ({
         field: issue.path.join('.') || '(rot)',
         message: issue.message
       }))
-      app.log.warn({ details }, 'Valideringsfel')
+      app.log.warn({ details }, 'Validation error')
       return send(reply, request, 400, 'VALIDATION_ERROR', 'Ogiltig indata', details)
     }
 
-    // ── 3. Prisma — databasfel ─────────────────────────────────
-    // Prismas meddelanden är utmärkta för utvecklare och farliga för
-    // klienter. Vi översätter koden och kastar bort texten.
+    // ── 3. Prisma — database errors ─────────────────────────────
+    // Prisma's messages are excellent for developers and dangerous for
+    // clients. We translate the code and throw the text away.
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      app.log.error({ err: error, prismaCode: error.code }, 'Prisma-fel')
+      app.log.error({ err: error, prismaCode: error.code }, 'Prisma error')
 
       switch (error.code) {
-        case 'P2002': // unik constraint bruten
-          // Medvetet vag text. "E-postadressen är upptagen" bekräftar
-          // att adressen finns — det är enumeration via en annan dörr.
+        case 'P2002': // unique constraint violated
+          // Deliberately vague. "That email is taken" would confirm the
+          // address exists — enumeration through a different door.
           return send(reply, request, 409, 'CONFLICT', 'Resursen kunde inte skapas')
-        case 'P2025': // raden fanns inte
+        case 'P2025': // record not found
           return send(reply, request, 404, 'NOT_FOUND', 'Resursen hittades inte')
-        case 'P2003': // främmande nyckel bruten
+        case 'P2003': // foreign key constraint violated
           return send(reply, request, 409, 'CONFLICT', 'Åtgärden bryter mot en relation')
         default:
           return send(reply, request, 500, 'INTERNAL_ERROR', 'Ett internt fel uppstod')
       }
     }
 
-    // ── 4. Fastifys egna fel (för stor body, trasig JSON, ...) ──
-    // De bär redan en vettig statuskod. 4xx är användarens fel och
-    // meddelandet är ofarligt; 5xx tystar vi.
+    // ── 4. Fastify's own errors (body too large, malformed JSON, ...) ──
+    // These already carry a sensible status code. A 4xx is the caller's
+    // fault and its message is harmless; a 5xx we silence.
     const fields = readErrorFields(error)
     if (fields.statusCode >= 400 && fields.statusCode < 500) {
-      app.log.warn({ err: error }, 'Klientfel')
+      app.log.warn({ err: error }, 'Client error')
       return send(reply, request, fields.statusCode, fields.code, fields.message)
     }
 
-    // ── 5. Allt annat = en bugg vi inte förutsett ──────────────
-    // Full stacktrace i loggen, ingenting till klienten.
-    app.log.error({ err: error }, 'Ohanterat fel')
+    // ── 5. Anything else = a bug we did not anticipate ──────────
+    // Full stack trace in the log, nothing at all to the client.
+    app.log.error({ err: error }, 'Unhandled error')
 
     return send(
       reply,
       request,
       500,
       'INTERNAL_ERROR',
-      // Bara i utveckling visar vi det riktiga felet — annars läcker vi
-      // filnamn, radnummer och biblioteksversioner till vem som helst.
+      // Only in development do we show the real error — otherwise we leak
+      // file names, line numbers and library versions to anyone who asks.
       isProduction ? 'Ett internt fel uppstod' : `Ohanterat fel: ${fields.message}`
     )
   })
 
-  // 404 på en okänd URL ska ha SAMMA form som alla andra fel.
-  // Utan detta returnerar Fastify sitt eget format och klienten måste
-  // hantera två olika felstrukturer.
+  // A 404 on an unknown URL must use the SAME shape as every other error.
+  // Without this, Fastify returns its own format and the client has to
+  // handle two different error structures.
   app.setNotFoundHandler((request, reply) =>
     send(
       reply,
@@ -165,5 +169,5 @@ async function errorHandlerPlugin(app: FastifyInstance) {
 
 export default fp(errorHandlerPlugin, { name: 'errorHandler' })
 
-// Återexporteras så att resten av appen importerar fel från ett ställe.
+// Re-exported so the rest of the app imports errors from one place.
 export { AppError }

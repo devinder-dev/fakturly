@@ -1,18 +1,18 @@
-// server.ts — startpunkt. Bygger appen och startar den (lyssnar på en port).
-// All app-konfiguration bor i app.ts; här sköter vi bara uppstarten
-// och den kontrollerade nedstängningen.
+// server.ts — entry point. Builds the app and starts it (listens on a port).
+// All app configuration lives in app.ts; this file only handles startup and
+// controlled shutdown.
 
 import { buildApp } from './app.ts'
 import { env } from './lib/env.ts'
 
-// await: buildApp laddar plugin-en klart innan rutterna deklareras,
-// annars registreras rutter innan plugin-ens hookar finns på plats.
+// await: buildApp finishes loading plugins before declaring routes,
+// otherwise routes get registered before the plugins' hooks exist.
 const app = await buildApp()
 
-// try/catch så att vi loggar tydligt om uppstarten misslyckas.
+// try/catch so we log clearly if startup fails.
 try {
-  // 0.0.0.0 = lyssna på alla nätverksinterface. Krävs i Docker —
-  // med 'localhost' skulle servern bara nås inifrån containern.
+  // 0.0.0.0 = listen on all network interfaces. Required in Docker —
+  // with 'localhost' the server would only be reachable inside the container.
   await app.listen({ port: env.PORT, host: '0.0.0.0' })
 } catch (err) {
   app.log.error(err)
@@ -20,17 +20,17 @@ try {
 }
 
 // ── Graceful shutdown ────────────────────────────────────────────
-// Utan detta dödas processen direkt vid Ctrl+C eller `docker stop`:
-// pågående requests avbryts mitt i, och databasanslutningar lämnas
-// hängande. I ett betalsystem vill vi ALDRIG avbryta en transaktion.
+// Without this the process is killed instantly on Ctrl+C or `docker stop`:
+// in-flight requests are cut off mid-way and database connections are left
+// hanging. In a payment system we must NEVER abort a transaction halfway.
 //
-// SIGINT  = Ctrl+C i terminalen
-// SIGTERM = docker stop / Railway / Render ber processen avsluta
+// SIGINT  = Ctrl+C in the terminal
+// SIGTERM = docker stop / Railway / Render asking the process to exit
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, async () => {
-    app.log.info(`${signal} mottagen — stänger ner...`)
-    // app.close() väntar in pågående requests och kör sedan alla
-    // onClose-hooks (prisma.$disconnect, redis.quit).
+    app.log.info(`${signal} received — shutting down...`)
+    // app.close() waits for in-flight requests, then runs every onClose
+    // hook (prisma.$disconnect, redis.quit).
     await app.close()
     process.exit(0)
   })

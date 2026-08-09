@@ -1,29 +1,29 @@
-// plugins/prisma.ts — kopplar in Prisma i Fastify.
+// plugins/prisma.ts — wires Prisma into Fastify.
 //
-// Efter detta kan vi nå databasen var som helst i appen via `app.prisma`
-// eller `request.server.prisma` — utan att importera prisma-klienten i
-// varje fil. Det gör det enkelt att byta ut klienten i tester.
+// After this we can reach the database anywhere in the app via `app.prisma`
+// or `request.server.prisma` — without importing the client in every file.
+// That also makes it easy to swap the client out in tests.
 //
-// VIKTIGT — fastify-plugin (fp):
-// Fastify kapslar in (encapsulation) allt en plugin gör. Utan fp skulle
-// `app.decorate('prisma', ...)` bara synas INUTI den här pluginen, och
-// våra rutter skulle krascha med "prisma is not defined".
-// fp() säger: "den här dekorationen ska gälla hela appen".
+// IMPORTANT — fastify-plugin (fp):
+// Fastify encapsulates everything a plugin does. Without fp,
+// `app.decorate('prisma', ...)` would only be visible INSIDE this plugin and
+// our routes would crash with "prisma is not defined".
+// fp() says: "this decoration applies to the whole app".
 
 import fp from 'fastify-plugin'
 import type { FastifyInstance } from 'fastify'
 import { prisma } from '../lib/prisma.ts'
 
 async function prismaPlugin(app: FastifyInstance) {
-  // Anslut direkt vid uppstart istället för att låta första requesten
-  // betala kostnaden. Failar databasen är det bättre att veta nu.
+  // Connect at startup rather than making the first request pay the cost.
+  // If the database is unreachable, better to find out now.
   await prisma.$connect()
 
-  // decorate lägger till en egenskap på app-objektet.
+  // decorate adds a property to the app object.
   app.decorate('prisma', prisma)
 
-  // Graceful shutdown: när Fastify stängs (Ctrl+C, docker stop) stänger vi
-  // anslutningarna snyggt istället för att lämna dem hängande i Postgres.
+  // Graceful shutdown: when Fastify closes (Ctrl+C, docker stop) we close
+  // connections cleanly instead of leaving them hanging in Postgres.
   app.addHook('onClose', async () => {
     await prisma.$disconnect()
   })

@@ -1,27 +1,27 @@
-// redis.ts — EN Redis-anslutning för hela processen.
+// redis.ts — ONE Redis connection for the whole process.
 //
-// Vad använder vi Redis till i Fakturly?
-//   1. Denylist för utloggade JWT-tokens (revocable sessions)
-//   2. Rate limiting — räknar requests per IP
-//   3. Jobbkö med BullMQ (vecka 3)
+// What do we use Redis for in Fakturly?
+//   1. Denylist for logged-out JWTs (revocable sessions)
+//   2. Rate limiting — counting requests per IP
+//   3. Job queue with BullMQ (week 3)
 //
-// Varför ioredis och inte Bun.redis? ioredis är vad BullMQ kräver, så vi
-// slipper två olika Redis-bibliotek i samma projekt.
+// Why ioredis and not Bun.redis? ioredis is what BullMQ requires, so we avoid
+// having two different Redis libraries in the same project.
 //
-// OBS inför vecka 3: BullMQ ska INTE dela den här anslutningen. Workers
-// blockerar anslutningen medan de väntar på jobb, och BullMQ kräver
-// maxRetriesPerRequest: null. Vi skapar en egen anslutning åt BullMQ då.
+// NOTE for week 3: BullMQ must NOT share this connection. Workers block the
+// connection while waiting for jobs, and BullMQ requires
+// maxRetriesPerRequest: null. We will create a separate connection for it.
 
 import Redis from 'ioredis'
 import { env } from './env.ts'
 
 export const redis = new Redis(env.REDIS_URL, {
-  // Hur många gånger ett kommando görs om innan det kastar fel.
-  // Vi vill hellre få ett tydligt fel snabbt än att en request hänger.
+  // How many times a command is retried before it throws.
+  // We would rather get a clear error quickly than have a request hang.
   maxRetriesPerRequest: 3,
 
-  // Backoff: vänta längre och längre mellan återanslutningsförsök,
-  // max 2 sekunder. Utan tak hamnar vi i en tight loop som spammar
-  // en nedsläckt Redis med anslutningsförsök.
+  // Backoff: wait longer and longer between reconnection attempts, capped at
+  // 2 seconds. Without a cap we end up in a tight loop hammering a Redis
+  // instance that is down.
   retryStrategy: (times: number) => Math.min(times * 200, 2000)
 })

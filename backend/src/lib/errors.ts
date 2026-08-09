@@ -1,15 +1,18 @@
-// errors.ts — typade domänfel (domain errors).
+// errors.ts — typed domain errors.
 //
-// Regeln: SERVICES KASTAR, EN PLATS ÖVERSÄTTER.
-// Ett service-lager vet ingenting om HTTP. Det kastar "ogiltiga
-// inloggningsuppgifter", inte "401". Översättningen till statuskod sker
-// på exakt ett ställe (plugins/errorHandler.ts).
+// The rule: SERVICES THROW, ONE PLACE TRANSLATES.
+// A service layer knows nothing about HTTP. It throws "invalid credentials",
+// not "401". Translation to a status code happens in exactly one place
+// (plugins/errorHandler.ts).
 //
-// Varför? Overdue-jobbet körs från en BullMQ-worker där det inte finns
-// någon `reply` alls. En service som anropar reply.code(401) går helt
-// enkelt inte att återanvända därifrån.
+// Why? The overdue-invoice job runs from a BullMQ worker where no `reply`
+// exists at all. A service that calls reply.code(401) simply cannot be
+// reused from there.
+//
+// Note: the message strings are Swedish because they are shown to Swedish
+// customers. Everything a developer reads is English.
 
-/** Maskinläsbar felkod. Klienten kan matcha på den; texten kan ändras. */
+/** Machine-readable error code. Clients match on this; the text may change. */
 export type ErrorCode =
   | 'VALIDATION_ERROR'
   | 'INVALID_CREDENTIALS'
@@ -24,17 +27,17 @@ export type ErrorCode =
 export class AppError extends Error {
   readonly statusCode: number
   readonly code: ErrorCode
-  /** Extra info som är SÄKER att visa klienten (t.ex. vilka fält som var fel). */
+  /** Extra information that is SAFE to show the client (e.g. which fields failed). */
   readonly details?: unknown
 
   /**
-   * Skiljer förväntade fel från buggar.
+   * Separates expected errors from bugs.
    *
-   * true  = normal affärshändelse (fel lösenord, faktura saknas).
-   *         Klienten får veta vad som hände.
-   * false = defekt i koden (undefined.id, trasig SQL).
-   *         Klienten får "internt fel" och inget mer — annars läcker vi
-   *         detaljer om systemets insida till en angripare.
+   * true  = normal business event (wrong password, invoice not found).
+   *         The client is told what happened.
+   * false = a defect in our code (undefined.id, broken SQL).
+   *         The client gets "internal error" and nothing more — otherwise
+   *         we leak details about the system's internals to an attacker.
    */
   readonly isOperational: boolean
 
@@ -54,7 +57,7 @@ export class AppError extends Error {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 400 — indatat höll inte formen
+// 400 — the input did not match the expected shape
 // ─────────────────────────────────────────────────────────────
 
 export class ValidationError extends AppError {
@@ -64,19 +67,19 @@ export class ValidationError extends AppError {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 401 — autentisering
+// 401 — authentication
 // ─────────────────────────────────────────────────────────────
 
 /**
- * ETT fel för ALLA misslyckade inloggningar.
+ * ONE error for ALL failed logins.
  *
- * Detta är avsiktligt en enda klass, inte tre. Skulle vi ha separata fel
- * för "användaren finns inte", "fel lösenord" och "kontot är låst" skulle
- * någon förr eller senare returnera olika meddelanden — och då kan vem som
- * helst räkna ut vilka e-postadresser som är registrerade hos oss
- * (user enumeration). Kundlistan är affärshemlighet.
+ * This is deliberately a single class, not three. With separate errors for
+ * "no such user", "wrong password" and "account locked", someone would
+ * eventually return different messages — and then anyone could work out
+ * which email addresses are registered with us (user enumeration). The
+ * customer list is a trade secret.
  *
- * Genom att göra det strukturellt omöjligt slipper vi förlita oss på disciplin.
+ * Making it structurally impossible beats relying on discipline.
  */
 export class InvalidCredentialsError extends AppError {
   constructor() {
@@ -85,15 +88,15 @@ export class InvalidCredentialsError extends AppError {
 }
 
 /**
- * Kontot är låst efter för många försök.
+ * The account is locked after too many attempts.
  *
- * OBS: utåt är detta IDENTISKT med InvalidCredentialsError — samma
- * statuskod, samma text. Skillnaden finns bara internt så att vi kan
- * logga låsningen separat. Berättar vi "kontot är låst" har vi bekräftat
- * att adressen finns, och en angripare kan låsa ut kunder med flit.
+ * NOTE: externally this is IDENTICAL to InvalidCredentialsError — same status
+ * code, same message. The distinction exists only internally, so we can log
+ * lockouts separately. Saying "account locked" confirms the address exists,
+ * and lets an attacker lock customers out on purpose.
  *
- * Avvägningen: sämre användarupplevelse (du får inte veta varför) mot
- * ingen enumeration. Riktiga banker löser det med upplåsning via e-post.
+ * The trade-off: worse UX (you are not told why) against no enumeration.
+ * Real banks solve it with unlock-by-email.
  */
 export class AccountLockedError extends AppError {
   readonly lockedUntil: Date
@@ -104,7 +107,7 @@ export class AccountLockedError extends AppError {
   }
 }
 
-/** Saknad, utgången eller spärrad token på en skyddad route. */
+/** Missing, expired or denylisted token on a protected route. */
 export class UnauthenticatedError extends AppError {
   constructor(message = 'Autentisering krävs') {
     super(message, 401, 'UNAUTHENTICATED')
@@ -115,7 +118,7 @@ export class UnauthenticatedError extends AppError {
 // 403 / 404 / 409
 // ─────────────────────────────────────────────────────────────
 
-/** Inloggad, men fel roll. Skillnad mot 401: vi VET vem du är. */
+/** Logged in, but wrong role. Unlike 401: we KNOW who you are. */
 export class ForbiddenError extends AppError {
   constructor(message = 'Du har inte behörighet till denna resurs') {
     super(message, 403, 'FORBIDDEN')
@@ -135,16 +138,16 @@ export class ConflictError extends AppError {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 429 — för många requests
+// 429 — too many requests
 // ─────────────────────────────────────────────────────────────
 
 export class RateLimitError extends AppError {
   readonly retryAfterSeconds: number
 
   constructor(retryAfterSeconds: number) {
-    // retryAfterSeconds ligger BÅDE i Retry-After-headern (standarden, som
-    // HTTP-klienter förstår automatiskt) och i body:n (så att en frontend
-    // kan visa "försök igen om 42 sekunder" utan att läsa headers).
+    // retryAfterSeconds goes BOTH in the Retry-After header (the standard,
+    // which HTTP clients understand automatically) and in the body (so a
+    // frontend can render "try again in 42 seconds" without reading headers).
     super('För många försök. Försök igen senare.', 429, 'RATE_LIMITED', {
       details: { retryAfterSeconds }
     })
@@ -153,13 +156,13 @@ export class RateLimitError extends AppError {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 422 — formen är rätt, men affärsregeln säger nej
+// 422 — the shape is valid, but a business rule says no
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Exempel: "en betald faktura kan inte krediteras", "beloppet måste vara
- * större än noll". Skiljer sig från 400: datan ÄR välformad, men handlingen
- * är otillåten i nuvarande tillstånd.
+ * Examples: "a paid invoice cannot be credited", "the amount must be greater
+ * than zero". Different from 400: the data IS well-formed, but the action is
+ * not allowed in the current state.
  */
 export class BusinessRuleError extends AppError {
   constructor(message: string, details?: unknown) {
@@ -168,7 +171,7 @@ export class BusinessRuleError extends AppError {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Hjälpare
+// Helpers
 // ─────────────────────────────────────────────────────────────
 
 export function isAppError(error: unknown): error is AppError {

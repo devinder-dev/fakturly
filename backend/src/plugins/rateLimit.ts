@@ -1,16 +1,17 @@
-// plugins/rateLimit.ts — lager 1: begränsning per IP-adress.
+// plugins/rateLimit.ts — layer 1: limiting per IP address.
 //
-// Varför Redis och inte minnet?
-//   - Minnet nollställs vid varje deploy. En angripare som får 5 försök
-//     per minut får plötsligt 5 nya direkt efter en omstart.
-//   - Kör vi tre instanser bakom en lastbalanserare har varje instans sin
-//     egen räknare — alltså 15 försök per minut istället för 5.
-// Redis ger EN delad räknare som överlever både omstart och utskalning.
+// Why Redis and not memory?
+//   - Memory resets on every deploy. An attacker capped at 5 attempts per
+//     minute suddenly gets 5 fresh ones right after a restart.
+//   - With three instances behind a load balancer, each instance keeps its
+//     own counter — so 15 attempts per minute instead of 5.
+// Redis gives ONE shared counter that survives restarts and scaling out.
 //
-// OBS: detta är bara halva skyddet. Per-IP fångar klassisk brute force
-// (ett konto, många lösenord) men missar password spraying (ett lösenord,
-// tusentals konton) — där varje IP och varje konto ser få försök.
-// Lager 2 (services/loginAttempts.service.ts) täcker det.
+// NOTE: this is only half the protection. Per-IP catches classic brute force
+// (one account, many passwords) and password spraying from a single source,
+// but misses distributed brute force where a botnet spreads attempts against
+// one account across hundreds of IPs.
+// Layer 2 (services/loginAttempts.service.ts) covers that.
 
 import fp from 'fastify-plugin'
 import rateLimit from '@fastify/rate-limit'
@@ -19,37 +20,37 @@ import { RateLimitError } from '../lib/errors.ts'
 
 async function rateLimitPlugin(app: FastifyInstance) {
   await app.register(rateLimit, {
-    // Redis-backad räknare. Vi återanvänder appens befintliga anslutning.
+    // Redis-backed counter, reusing the app's existing connection.
     redis: app.redis,
 
-    // Prefix så att rate limit-nycklar inte krockar med jti-denylistan
-    // eller BullMQ:s nycklar i samma Redis.
+    // Prefix so rate-limit keys cannot collide with the jti denylist or
+    // BullMQ's keys in the same Redis instance.
     nameSpace: 'fakturly:rl:',
 
-    // Generöst globalt tak. Enskilda auth-rutter sätter mycket hårdare
-    // gränser själva via sin route-config.
+    // Generous global ceiling. Individual auth routes set far stricter
+    // limits themselves through their route config.
     global: true,
     max: 100,
     timeWindow: '1 minute',
 
-    // Nyckeln är klientens IP. request.ip respekterar X-Forwarded-For
-    // endast när trustProxy är på — vilket vi satt i produktion. Utan det
-    // skulle alla bakom en proxy dela EN räknare och låsa varandra ute.
+    // The key is the client IP. request.ip only respects X-Forwarded-For
+    // when trustProxy is on — which we enable in production. Without it,
+    // everyone behind a proxy would share ONE counter and lock each other out.
     keyGenerator: (request) => request.ip,
 
-    // Plugin-et KASTAR det som errorResponseBuilder returnerar. Returnerar
-    // vi ett vanligt objekt saknar det statusCode, och vår centrala
-    // felhanterare tolkar det som en okänd bugg -> 500 istället för 429.
+    // NOTE: the plugin THROWS whatever errorResponseBuilder returns. Return a
+    // plain object and it has no statusCode, so our central error handler
+    // treats it as an unknown bug -> 500 instead of 429.
     //
-    // Genom att returnera ett riktigt RateLimitError går det genom exakt
-    // samma väg som alla andra domänfel: rätt status, vårt felformat,
-    // requestId och Retry-After-headern — allt på ett ställe.
+    // Returning a real RateLimitError sends it down exactly the same path as
+    // every other domain error: right status, our error shape, requestId and
+    // the Retry-After header — all defined in one place.
     errorResponseBuilder: (_request, context) => {
       throw new RateLimitError(Math.ceil(context.ttl / 1000))
     },
 
-    // Skicka med hur många försök som återstår redan INNAN taket nås.
-    // En ärlig klient kan då sakta ner självmant.
+    // Report how many attempts remain even BEFORE the limit is hit, so a
+    // well-behaved client can slow itself down.
     addHeadersOnExceeding: {
       'x-ratelimit-limit': true,
       'x-ratelimit-remaining': true,
@@ -61,22 +62,28 @@ async function rateLimitPlugin(app: FastifyInstance) {
 export default fp(rateLimitPlugin, { name: 'rateLimit', dependencies: ['redis'] })
 
 // ─────────────────────────────────────────────────────────────
-// Färdiga konfigurationer att hänga på enskilda rutter.
+// Ready-made configs to attach to individual routes.
 //
-// Används så här i en route:
+// Used like this:
 //   app.post('/auth/login', { config: { rateLimit: LOGIN_RATE_LIMIT } }, handler)
+//
+// Caveat worth knowing: this is a FIXED window, not a sliding one. The
+// counter is a single number with a TTL, so a client can spend its full
+// quota just before the reset and again just after — up to 2x the limit
+// across that boundary. Acceptable here because the per-account limiter and
+// the progressive delay still apply to every individual attempt.
 // ─────────────────────────────────────────────────────────────
 
-/** Inloggning: 5 försök per minut per IP. */
+/** Login: 5 attempts per minute per IP. */
 export const LOGIN_RATE_LIMIT = {
   max: 5,
   timeWindow: '1 minute'
 } as const
 
 /**
- * Token-förnyelse: generösare. En legitim klient med flera flikar öppna
- * kan förnya oftare än man tror, och en refresh token är redan skyddad
- * av rotation och stöldupptäckt.
+ * Token refresh: more generous. A legitimate client with several tabs open
+ * refreshes more often than you would expect, and a refresh token is already
+ * protected by rotation and theft detection.
  */
 export const REFRESH_RATE_LIMIT = {
   max: 20,
@@ -84,7 +91,8 @@ export const REFRESH_RATE_LIMIT = {
 } as const
 
 /**
- * Att sätta lösenord: dyrt för oss (Argon2id + HIBP-anrop), så taket är lågt.
+ * Setting a password: expensive for us (Argon2id + an HIBP call), so the
+ * ceiling is low.
  */
 export const SET_PASSWORD_RATE_LIMIT = {
   max: 5,

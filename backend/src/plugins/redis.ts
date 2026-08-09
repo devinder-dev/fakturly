@@ -1,21 +1,21 @@
-// plugins/redis.ts — kopplar in Redis i Fastify.
-// Samma mönster som prisma-pluginen: fp() gör `app.redis` synlig överallt.
+// plugins/redis.ts — wires Redis into Fastify.
+// Same pattern as the prisma plugin: fp() makes `app.redis` visible app-wide.
 
 import fp from 'fastify-plugin'
 import type { FastifyInstance } from 'fastify'
 import { redis } from '../lib/redis.ts'
 
 async function redisPlugin(app: FastifyInstance) {
-  // ioredis ansluter lazy (vid första kommandot). Vi kör en PING vid
-  // uppstart för att misslyckas direkt om Redis inte är igång —
-  // hellre ett tydligt fel nu än ett mystiskt 500-fel vid inloggning.
+  // ioredis connects lazily (on the first command). We send a PING at startup
+  // so we fail immediately if Redis is not running — better a clear error now
+  // than a mysterious 500 during a login.
   await redis.ping()
 
   app.decorate('redis', redis)
 
   app.addHook('onClose', async () => {
-    // quit() väntar in pågående kommandon innan den stänger.
-    // (disconnect() river anslutningen direkt — det vill vi inte.)
+    // quit() waits for in-flight commands before closing.
+    // (disconnect() tears the connection down immediately — not what we want.)
     await redis.quit()
   })
 }
