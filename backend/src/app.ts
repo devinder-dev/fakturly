@@ -11,6 +11,7 @@ import prismaPlugin from './plugins/prisma.ts'
 import rateLimitPlugin from './plugins/rateLimit.ts'
 import redisPlugin from './plugins/redis.ts'
 import authRoutes from './routes/auth.routes.ts'
+import clientRoutes from './routes/clients.routes.ts'
 
 // buildApp creates a fresh app every time it is called.
 // Tests want a clean app each run — hence a function, not a module-level app.
@@ -96,10 +97,13 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
   })
 
-  // Auth: login, refresh, logout.
+  // Auth: login, refresh, logout, me.
   await app.register(authRoutes)
 
-  // Invoices and clients get registered here later.
+  // Client provisioning (admin only).
+  await app.register(clientRoutes)
+
+  // Invoices get registered here later.
 
   return app
 }

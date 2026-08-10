@@ -151,7 +151,8 @@ export async function me(request: FastifyRequest, reply: FastifyReply) {
 export async function logout(request: FastifyRequest, reply: FastifyReply) {
   await authService.logout(
     request.cookies[REFRESH_COOKIE],
-    readAccessTokenClaims(request)
+    readAccessTokenClaims(request),
+    requestContext(request)
   )
 
   // clearCookie must use the same path, or the browser keeps the old cookie

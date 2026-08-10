@@ -28,6 +28,7 @@ import {
 } from './token.service.ts'
 import * as userRepository from '../repositories/user.repository.ts'
 import * as refreshTokenRepository from '../repositories/refreshToken.repository.ts'
+import { record, AuditAction, AuditResource } from './audit.service.ts'
 import { InvalidCredentialsError, UnauthenticatedError } from '../lib/errors.ts'
 import type { Role } from '../generated/prisma/client.ts'
 
@@ -102,7 +103,20 @@ export async function login(
   // Throws RateLimitError (429) when this address has too many recent
   // failures. Counted for addresses that do not exist too, so a locked
   // response does not confirm the account is real.
-  await assertAccountNotLocked(email)
+  try {
+    await assertAccountNotLocked(email)
+  } catch (error) {
+    // Log the block before rethrowing. Repeated entries here are the signal
+    // that someone is actively grinding one account.
+    await record({
+      action: AuditAction.LOGIN_BLOCKED_RATE_LIMIT,
+      resource: AuditResource.USER,
+      email,
+      ipAddress: context.ip,
+      userAgent: context.userAgent
+    })
+    throw error
+  }
 
   const user = await userRepository.findAuthUserByEmail(email)
 
@@ -113,6 +127,22 @@ export async function login(
 
   if (!user || !passwordMatches) {
     const attempts = await recordFailedAttempt(email)
+
+    // Record the attempt. userId is null when the address does not exist —
+    // and those rows are the whole point. A burst of LOGIN_FAILED entries
+    // against addresses that were never registered is what credential
+    // stuffing looks like, and the old required-userId schema made them
+    // impossible to store at all.
+    await record({
+      action: AuditAction.LOGIN_FAILED,
+      resource: AuditResource.USER,
+      userId: user?.id ?? null,
+      email,
+      resourceId: user?.id ?? null,
+      ipAddress: context.ip,
+      userAgent: context.userAgent
+    })
+
     // Wait BEFORE responding, so an attacker's tooling is actually slowed.
     await applyProgressiveDelay(attempts)
     throw new InvalidCredentialsError()
@@ -126,9 +156,28 @@ export async function login(
   if (needsRehash(user.password)) {
     const upgraded = await hashPassword(password)
     await userRepository.updatePasswordHash(user.id, upgraded)
+    await record({
+      action: AuditAction.PASSWORD_REHASHED,
+      resource: AuditResource.USER,
+      userId: user.id,
+      resourceId: user.id,
+      ipAddress: context.ip
+    })
   }
 
-  return issueTokenPair(user, createTokenFamilyId(), context)
+  const result = await issueTokenPair(user, createTokenFamilyId(), context)
+
+  await record({
+    action: AuditAction.LOGIN_SUCCESS,
+    resource: AuditResource.USER,
+    userId: user.id,
+    email: user.email,
+    resourceId: user.id,
+    ipAddress: context.ip,
+    userAgent: context.userAgent
+  })
+
+  return result
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -169,7 +218,20 @@ export async function refresh(
   // ── Theft detection ──────────────────────────────────────────
   // Nobody legitimately reuses a spent token.
   if (stored.rotatedAt !== null) {
-    await refreshTokenRepository.revokeFamily(stored.familyId)
+    const revokedCount = await refreshTokenRepository.revokeFamily(stored.familyId)
+
+    // The highest-severity event this system produces. Someone holds a copy
+    // of a token they should not have. This row is what an alert watches for.
+    await record({
+      action: AuditAction.TOKEN_THEFT_DETECTED,
+      resource: AuditResource.REFRESH_TOKEN,
+      userId: stored.userId,
+      resourceId: stored.familyId,
+      ipAddress: context.ip,
+      userAgent: context.userAgent
+    })
+    void revokedCount
+
     throw new UnauthenticatedError()
   }
 
@@ -192,7 +254,18 @@ export async function refresh(
   // chain stays linked and revocable as a unit.
   await refreshTokenRepository.markRotated(stored.id)
 
-  return issueTokenPair(user, stored.familyId, context)
+  const result = await issueTokenPair(user, stored.familyId, context)
+
+  await record({
+    action: AuditAction.TOKEN_REFRESHED,
+    resource: AuditResource.REFRESH_TOKEN,
+    userId: user.id,
+    resourceId: stored.familyId,
+    ipAddress: context.ip,
+    userAgent: context.userAgent
+  })
+
+  return result
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -212,8 +285,12 @@ export async function refresh(
  */
 export async function logout(
   rawRefreshToken: string | undefined,
-  accessTokenClaims: AccessTokenClaims | undefined
+  accessTokenClaims: AccessTokenClaims | undefined,
+  context: RequestContext = {}
 ): Promise<void> {
+  let userId: string | null = null
+  let familyId: string | null = null
+
   if (rawRefreshToken) {
     const stored = await refreshTokenRepository.findByTokenHash(
       hashRefreshToken(rawRefreshToken)
@@ -222,6 +299,8 @@ export async function logout(
     // should not leave a rotated sibling alive.
     if (stored) {
       await refreshTokenRepository.revokeFamily(stored.familyId)
+      userId = stored.userId
+      familyId = stored.familyId
     }
   }
 
@@ -229,6 +308,21 @@ export async function logout(
     // TTL = the token's remaining lifetime, so the entry evicts itself
     // exactly when the token would have expired anyway.
     await revokeAccessToken(accessTokenClaims.jti, accessTokenClaims.exp)
+    userId ??= accessTokenClaims.sub
+  }
+
+  // Only record a logout that actually ended something. A request with no
+  // valid token still returns 204, but writing an audit row for it would let
+  // anyone flood the log with meaningless entries.
+  if (userId) {
+    await record({
+      action: AuditAction.LOGOUT,
+      resource: AuditResource.USER,
+      userId,
+      resourceId: familyId,
+      ipAddress: context.ip,
+      userAgent: context.userAgent
+    })
   }
 }
 
