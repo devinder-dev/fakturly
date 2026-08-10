@@ -5,6 +5,7 @@
 
 import type { FastifyInstance } from 'fastify'
 import * as authController from '../controllers/auth.controller.ts'
+import { authenticate } from '../middleware/authenticate.ts'
 import { LOGIN_RATE_LIMIT, REFRESH_RATE_LIMIT } from '../plugins/rateLimit.ts'
 
 export default async function authRoutes(app: FastifyInstance) {
@@ -47,4 +48,16 @@ export default async function authRoutes(app: FastifyInstance) {
    * worse than any load it could cause.
    */
   app.post('/auth/logout', authController.logout)
+
+  /**
+   * GET /auth/me — the first genuinely protected route.
+   *
+   * onRequest runs before Fastify parses a body, so an unauthenticated
+   * request is refused at the earliest possible point.
+   *
+   * No authorize() here on purpose: every logged-in user may read their own
+   * profile, regardless of role. Role gates go on routes where the role is
+   * what decides, such as the admin-only client provisioning in step 7.
+   */
+  app.get('/auth/me', { onRequest: [authenticate] }, authController.me)
 }

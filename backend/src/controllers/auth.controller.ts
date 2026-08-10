@@ -7,6 +7,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { loginSchema } from '../validators/auth.validator.ts'
 import * as authService from '../services/auth.service.ts'
+import { findAuthUserById } from '../repositories/user.repository.ts'
 import { verifyAccessToken, type AccessTokenClaims } from '../services/token.service.ts'
 import { isProduction, env } from '../lib/env.ts'
 import { UnauthenticatedError } from '../lib/errors.ts'
@@ -117,6 +118,33 @@ export async function refresh(request: FastifyRequest, reply: FastifyReply) {
   return reply.code(200).send({
     accessToken: result.accessToken,
     user: result.user
+  })
+}
+
+/**
+ * Returns the currently authenticated user.
+ *
+ * Note that this reads from the DATABASE rather than just echoing the token's
+ * claims back. The token carries only an id and a role — no email, because a
+ * JWT is base64 and readable by anyone holding it.
+ *
+ * Reading fresh also means a role changed five minutes ago is reflected now,
+ * instead of being stale until the token expires.
+ */
+export async function me(request: FastifyRequest, reply: FastifyReply) {
+  // authenticate has already run, so authUser is present. TypeScript cannot
+  // know that from the route wiring, so we check — and if it is ever missing
+  // that means the middleware was not attached, which must fail closed.
+  const caller = request.authUser
+  if (!caller) throw new UnauthenticatedError()
+
+  const user = await findAuthUserById(caller.id)
+
+  // The token is valid but the user is gone — deleted since it was issued.
+  if (!user) throw new UnauthenticatedError()
+
+  return reply.code(200).send({
+    user: { id: user.id, email: user.email, role: user.role }
   })
 }
 
