@@ -12,6 +12,7 @@ import rateLimitPlugin from './plugins/rateLimit.ts'
 import redisPlugin from './plugins/redis.ts'
 import authRoutes from './routes/auth.routes.ts'
 import clientRoutes from './routes/clients.routes.ts'
+import invoiceRoutes from './routes/invoices.routes.ts'
 
 // buildApp creates a fresh app every time it is called.
 // Tests want a clean app each run — hence a function, not a module-level app.
@@ -105,7 +106,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Client provisioning (admin only).
   await app.register(clientRoutes)
 
-  // Invoices get registered here later.
+  // Invoices.
+  await app.register(invoiceRoutes)
 
   return app
 }
