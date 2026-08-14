@@ -14,7 +14,7 @@ Not a CRUD tutorial — every decision is documented with its reasoning and the 
 [![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](https://redis.io)
 [![CI](https://github.com/devinder-dev/fakturly/actions/workflows/ci.yml/badge.svg)](https://github.com/devinder-dev/fakturly/actions/workflows/ci.yml)
 
-**[📐 Architecture Decision Record](docs/architecture-decisions.md)** · **[📖 Auth phase walkthrough](docs/auth-phase-walkthrough.md)**
+**[📐 Architecture Decision Record](docs/architecture-decisions.md)** · **[📖 Auth walkthrough](docs/auth-phase-walkthrough.md)** · **[🔌 Integrations](docs/integrations.md)**
 
 </div>
 
@@ -23,8 +23,8 @@ Not a CRUD tutorial — every decision is documented with its reasoning and the 
 > [!NOTE]
 > **Actively being built.** Auth and invoicing are done and tested — an admin
 > can provision a customer, issue a VAT-correct invoice, and the customer sees
-> only their own, and Stripe payments are wired up end to end. Background
-> jobs and the frontend are next. See
+> only their own, Stripe payments settle invoices, and overdue interest
+> accrues nightly. The frontend is next. See
 > **[Status](#-status)** — no feature is claimed here before it runs.
 
 ## Why this exists
@@ -123,10 +123,11 @@ request exists.
 | CI: typecheck, migrations, full suite on every push | ✅ |
 | Set-password invite email, single-use expiring tokens | ✅ |
 | Stripe Checkout + webhook, three layers of idempotency | ✅ |
-| Background jobs, statutory late fees, reminder emails | ⏳ next |
-| React frontend, PDF invoices | ⏳ planned |
+| Statutory late fees (räntelagen), daily accrual | ✅ |
+| BullMQ workers + cron scheduler, retries and backoff | ✅ |
+| React frontend, PDF invoices | ⏳ next |
 
-**223 tests / 466 assertions** pass across 11 suites, zero failures, in CI
+**312 tests / 657 assertions** pass across 17 suites, zero failures, in CI
 against a real PostgreSQL and Redis on every push — including a measured
 timing-attack defence, a forced transaction rollback leaving neither row, a
 refresh-token replay triggering family-wide revocation, and 50 concurrent
