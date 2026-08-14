@@ -20,9 +20,12 @@ Not a CRUD tutorial — every decision is documented with its reasoning and the 
 ---
 
 > [!NOTE]
-> **Actively being built.** The backend foundation and the authentication layer
-> are in progress. [Status](#-status) lists precisely what works today — no
-> feature is claimed before it runs.
+> **Actively being built.** The backend foundation and the full authentication
+> layer are complete and tested. [Status](#-status) lists precisely what works
+> today — no feature is claimed before it runs.
+>
+> 📖 **[Auth phase walkthrough](docs/auth-phase-walkthrough.md)** — every
+> decision, with flow diagrams and a plain-English version.
 
 ## Why this project exists
 
@@ -165,17 +168,21 @@ which one was ours. In testing, `password` came back with **52,372,427** hits.
 | Liveness + readiness endpoints | ✅ |
 | Typed domain errors + central error handler | ✅ |
 | Input validation + breach checking | ✅ |
-| Two-layer rate limiting | ✅ |
-| Password hashing service | 🔨 in progress |
-| Login / refresh / logout with token rotation | 🔨 in progress |
-| Auth middleware, audit logging | ⏳ next |
-| Client + invoice CRUD | ⏳ planned |
-| Stripe payments, background jobs, emails | ⏳ planned |
+| Two-layer rate limiting (per IP + per account) | ✅ |
+| Argon2id hashing with constant-time verification | ✅ |
+| Login / refresh / logout, token rotation + theft detection | ✅ |
+| `authenticate` / `authorize` middleware, Redis denylist | ✅ |
+| Audit logging | ✅ |
+| Admin seed + atomic client provisioning | ✅ |
+| Set-password invite email | 🔨 week 3 |
+| Client + invoice CRUD | ⏳ next |
+| Stripe payments, background jobs | ⏳ planned |
 | React frontend, PDF invoices | ⏳ planned |
 
-**70 assertions** currently pass across validation, error handling and rate
-limiting — verified in both development and production mode, including live
-HaveIBeenPwned calls and a real Prisma constraint collision.
+**183 assertions** pass across 7 suites, zero failures — including live
+HaveIBeenPwned calls, a measured timing-attack defence (10.2 ms vs 10.3 ms),
+a forced transaction rollback, and a real refresh-token replay triggering
+family-wide revocation.
 
 ## Quick start
 
