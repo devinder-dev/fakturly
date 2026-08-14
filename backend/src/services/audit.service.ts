@@ -28,7 +28,8 @@ export const AuditAction = {
   TOKEN_REFRESHED: 'TOKEN_REFRESHED',
   TOKEN_THEFT_DETECTED: 'TOKEN_THEFT_DETECTED',
   PASSWORD_REHASHED: 'PASSWORD_REHASHED',
-  CLIENT_CREATED: 'CLIENT_CREATED'
+  CLIENT_CREATED: 'CLIENT_CREATED',
+  CLIENT_UPDATED: 'CLIENT_UPDATED'
 } as const
 
 export type AuditActionType = (typeof AuditAction)[keyof typeof AuditAction]
