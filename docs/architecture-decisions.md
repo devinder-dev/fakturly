@@ -318,6 +318,147 @@ both paths equally slow.
 
 ---
 
+## 22. VAT lives on the line item, not the invoice
+
+**Context:** The original schema had no VAT anywhere, which meant it could not
+produce a legally valid Swedish invoice.
+
+**Decision:** Each `InvoiceItem` carries its own `vatRate`, plus stored
+`netOre`, `vatOre` and `grossOre`. The invoice stores `netTotalOre`,
+`vatTotalOre` and `grossTotalOre`.
+
+**Why per line:** one invoice legitimately mixes rates — consulting at 25% and
+a printed book at 6% on the same document. A single rate per invoice would
+have needed a second migration the first time that happened.
+
+**Why rates are basis points** (`2500` = 25.00%): the same reason money is öre.
+`0.25` has no exact binary representation, and a VAT rate multiplied by an
+amount is exactly where that error would land.
+
+**Why the amounts are stored, not computed on read:** an invoice is a financial
+record. What it said when it was issued must not change because a calculation
+was later corrected.
+
+---
+
+## 23. VAT is rounded per line, then summed
+
+**Decision:** Round each line's VAT to whole öre, then add those up. Not: sum
+the net and apply VAT once.
+
+**Why:** the two genuinely differ. Three lines of 33 öre at 25% give **24 öre**
+per-line and **25 öre** total-first. Per-line is what the printed invoice
+shows — each row displays its own VAT, and those displayed figures must add up
+to the stated total, or the document visibly does not sum.
+
+Skatteverket permits either method. It does not permit switching between them.
+
+---
+
+## 24. Rounding is half away from zero
+
+**Decision:** `roundOre` rounds `0.5` up and `-0.5` down. Not `Math.round`.
+
+**Why:** `Math.round(-0.5)` is `0` — it rounds half toward positive infinity.
+That asymmetry means a credit note would fail to cancel its original invoice by
+one öre. The result is a ledger that will not balance, discovered months later,
+with no obvious cause.
+
+Tested directly: `roundOre(-x) === -roundOre(x)`, and a credit note cancels its
+original to exactly zero.
+
+---
+
+## 25. Invoice numbers are allocated server-side from a per-year counter
+
+**Context:** Bokföringslagen requires invoice numbers to form an unbroken
+series. The point is that a deleted invoice cannot be hidden: if `2026-0007` is
+missing, that absence is visible and must be explained.
+
+**Decision:** A single `INSERT … ON CONFLICT DO UPDATE … RETURNING` against an
+`InvoiceNumberSeries` row. The caller never supplies a number.
+
+**Rejected — read then write:** between reading 7 and writing 8, another request
+reads 7 too. Both write 8. Two invoices, one number. It only appears under
+load, which for an invoicing system means month end.
+
+**Rejected — `SELECT … FOR UPDATE` inside the invoice transaction:** it would
+hold the lock until the whole invoice commits, serialising every invoice
+creation in the system behind one row.
+
+**Accepted cost:** because allocation runs in its own transaction, a later
+failure leaves a number unused. A gap is explainable; a duplicate is not.
+
+Verified with 50 parallel allocations producing an unbroken 1–50.
+
+---
+
+## 26. The ledger entry is written on send, not on creation
+
+*Discovered by a failing test, 2026-08-14.*
+
+**Context:** Deleting a DRAFT invoice failed on a foreign key — the
+`INVOICE_CREATED` transaction row pointed at it.
+
+**Rejected fix:** `onDelete: Cascade` on `Transaction`. It would have made the
+test pass and made ledger rows deletable, quietly destroying the append-only
+guarantee in decision 2.
+
+**Decision:** A DRAFT writes no ledger row. `markSent` updates the status and
+writes the entry in one transaction.
+
+**Why:** a draft is not a financial event. Nobody has been invoiced, nothing is
+owed, and it can still be deleted. The ledger records the moment the invoice
+*becomes* a financial document — which is when it is sent, and from which point
+it can never be edited or deleted.
+
+Both facts must land together: an invoice marked SENT without its ledger row
+means money is owed and the ledger does not know.
+
+---
+
+## 27. A sent invoice is frozen; only drafts can be deleted
+
+**Decision:** `DRAFT → SENT → PAID | OVERDUE`, encoded as a lookup table rather
+than a chain of conditionals. DRAFT is the only deletable state.
+
+**Why a table:** the rules can be read at a glance, and adding a status cannot
+silently create a path nobody considered.
+
+**Why frozen:** once sent, a copy exists outside our system and Swedish
+bookkeeping law treats it as a financial record. A correction is a credit note,
+never an edit. A deleted sent invoice would leave a hole in the numbered series
+that somebody has to account for.
+
+**Concurrency:** the expected status sits in the `WHERE` clause rather than
+being checked beforehand, so two admins clicking "send" simultaneously cannot
+both succeed. Verified that a refused second send writes no second ledger row.
+
+---
+
+## 28. Ownership checks answer 404, never 403
+
+**Decision:** A client requesting a row belonging to someone else gets the same
+response as one requesting a row that never existed.
+
+**Why:** 403 means "this exists, and it is not yours". Walk a range of ids and
+every 403 is a real record — the customer base, enumerated, without ever seeing
+a single row.
+
+**It matters more for invoices than for clients:** numbers are sequential by
+law, so confirming that `2026-0007` exists reveals how many invoices the
+business has issued this year. That is commercially sensitive on its own.
+
+**Related:** list endpoints scope the QUERY, not the results. Filtering after
+fetching means another client's rows were already read into memory, and one
+forgotten filter later they are in a response.
+
+**Cost:** worse debugging. A developer hitting the wrong id sees "not found"
+rather than "wrong account". The same trade as the identical login errors in
+decision 21.
+
+---
+
 ## Open decisions
 
 | Question | Status |
