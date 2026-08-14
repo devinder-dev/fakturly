@@ -23,7 +23,8 @@ Not a CRUD tutorial — every decision is documented with its reasoning and the 
 > [!NOTE]
 > **Actively being built.** Auth and invoicing are done and tested — an admin
 > can provision a customer, issue a VAT-correct invoice, and the customer sees
-> only their own. Stripe payments and the frontend are next. See
+> only their own, and Stripe payments are wired up end to end. Background
+> jobs and the frontend are next. See
 > **[Status](#-status)** — no feature is claimed here before it runs.
 
 ## Why this exists
@@ -120,8 +121,9 @@ request exists.
 | Invoice numbering — unbroken series, concurrency-safe | ✅ |
 | Invoice creation, reads, send, immutable ledger | ✅ |
 | CI: typecheck, migrations, full suite on every push | ✅ |
-| Set-password invite email | 🔨 in progress |
-| Stripe payments, background jobs, late fees | ⏳ next |
+| Set-password invite email, single-use expiring tokens | ✅ |
+| Stripe Checkout + webhook, three layers of idempotency | ✅ |
+| Background jobs, statutory late fees, reminder emails | ⏳ next |
 | React frontend, PDF invoices | ⏳ planned |
 
 **223 tests / 466 assertions** pass across 11 suites, zero failures, in CI
