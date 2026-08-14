@@ -215,6 +215,71 @@ export async function listInvoices(
   return { invoices, total }
 }
 
+/**
+ * Records a payment: status to PAID, plus the ledger entry — atomically.
+ *
+ * `status: { in: ['SENT', 'OVERDUE'] }` in the WHERE clause is doing real
+ * work. It means:
+ *   - an already-PAID invoice matches nothing, so a duplicate payment webhook
+ *     cannot write a second PAYMENT_RECEIVED row
+ *   - a DRAFT cannot be marked paid, because it was never issued
+ *
+ * That is the second layer of idempotency. The first is the event log, which
+ * stops the same *delivery* being handled twice; this stops the same *payment*
+ * being applied twice even if it arrives as two different events.
+ *
+ * Returns null when nothing matched — the caller treats that as "already
+ * handled", not as an error.
+ */
+export async function markPaid(
+  id: string,
+  payment: { stripePaymentId: string; amountOre: number }
+): Promise<InvoiceRecord | null> {
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.invoice.updateMany({
+      where: { id, status: { in: ['SENT', 'OVERDUE'] } },
+      data: {
+        status: 'PAID',
+        paidAt: new Date(),
+        stripePaymentId: payment.stripePaymentId
+      }
+    })
+
+    if (updated.count === 0) return null
+
+    const invoice = await tx.invoice.findUniqueOrThrow({
+      where: { id },
+      select: invoiceSelect
+    })
+
+    await tx.transaction.create({
+      data: {
+        invoiceId: invoice.id,
+        type: 'PAYMENT_RECEIVED',
+        // The amount Stripe actually collected, not what we expected. If they
+        // differ, the ledger must record what really happened — the
+        // discrepancy is the finding, and hiding it would be the bug.
+        amountOre: payment.amountOre,
+        currency: invoice.currency,
+        description: `Betalning mottagen för faktura ${invoice.invoiceNumber}`
+      }
+    })
+
+    return invoice
+  })
+}
+
+/** Stores the Stripe checkout session id on an invoice. */
+export async function attachCheckoutSession(
+  id: string,
+  sessionId: string
+): Promise<void> {
+  await prisma.invoice.update({
+    where: { id },
+    data: { stripePaymentId: sessionId }
+  })
+}
+
 /** Deletes a DRAFT invoice. Items cascade; see the schema. */
 export async function deleteDraftInvoice(id: string): Promise<boolean> {
   // The status condition is in the WHERE clause, not just checked beforehand.

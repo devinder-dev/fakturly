@@ -7,6 +7,7 @@ import {
 } from '../validators/invoice.validator.ts'
 import { idParamSchema } from '../validators/client.validator.ts'
 import * as invoiceService from '../services/invoice.service.ts'
+import * as paymentService from '../services/payment.service.ts'
 import { formatOre } from '../lib/money.ts'
 import { UnauthenticatedError } from '../lib/errors.ts'
 import type { InvoiceRecord } from '../repositories/invoice.repository.ts'
@@ -128,4 +129,22 @@ export async function deleteInvoice(request: FastifyRequest, reply: FastifyReply
   await invoiceService.deleteDraft(id, admin.id, requestContext(request))
 
   return reply.code(204).send()
+}
+
+/**
+ * POST /invoices/:id/payment-link
+ *
+ * Creates a hosted Stripe checkout page for this invoice and returns its URL.
+ *
+ * A POST rather than a GET, even though it reads like one: it has a side
+ * effect (a session is created at Stripe and recorded on the invoice), and a
+ * GET would be retried by browsers and prefetched by link scanners.
+ */
+export async function createPaymentLink(request: FastifyRequest, reply: FastifyReply) {
+  const { id } = idParamSchema.parse(request.params)
+  const admin = requireCaller(request)
+
+  const link = await paymentService.createPaymentLink(id, admin.id, requestContext(request))
+
+  return reply.code(201).send({ paymentUrl: link.url, sessionId: link.sessionId })
 }

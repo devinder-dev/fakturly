@@ -37,7 +37,10 @@ export const AuditAction = {
   CLIENT_UPDATED: 'CLIENT_UPDATED',
   INVOICE_CREATED: 'INVOICE_CREATED',
   INVOICE_SENT: 'INVOICE_SENT',
-  INVOICE_DELETED: 'INVOICE_DELETED'
+  INVOICE_DELETED: 'INVOICE_DELETED',
+  PAYMENT_LINK_CREATED: 'PAYMENT_LINK_CREATED',
+  /** No acting user — Stripe told us, not a person. */
+  PAYMENT_RECEIVED: 'PAYMENT_RECEIVED'
 } as const
 
 export type AuditActionType = (typeof AuditAction)[keyof typeof AuditAction]

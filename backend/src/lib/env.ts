@@ -62,9 +62,41 @@ const envSchema = z.object({
   RESET_TOKEN_HOURS: z.coerce.number().int().positive().default(2)
 })
 
+/**
+ * Some variables are optional in development and REQUIRED in production.
+ *
+ * Stripe and Resend can be absent locally — the clients fall back to a stub
+ * that logs instead of calling out, so the whole flow can be built and tested
+ * without an account. That is genuinely useful, and it is also exactly how a
+ * system ends up deployed with payments silently disabled.
+ *
+ * superRefine closes that off: in production the keys must be present, and
+ * the process refuses to start otherwise. Fail at boot, in front of whoever
+ * deployed, rather than at the first customer payment.
+ */
+const envSchemaWithProductionRules = envSchema.superRefine((value, ctx) => {
+  if (value.NODE_ENV !== 'production') return
+
+  const required: Array<[keyof typeof value, string]> = [
+    ['STRIPE_SECRET_KEY', 'betalningar skulle tyst sluta fungera'],
+    ['STRIPE_WEBHOOK_SECRET', 'webhooks kunde inte verifieras'],
+    ['RESEND_API_KEY', 'inga mejl skulle skickas']
+  ]
+
+  for (const [key, consequence] of required) {
+    if (!value[key]) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [key],
+        message: `${String(key)} krävs i produktion — annars ${consequence}`
+      })
+    }
+  }
+})
+
 // safeParse does not throw — it returns a result we can act on, so we can
 // print a readable message instead of a stack trace.
-const parsed = envSchema.safeParse(process.env)
+const parsed = envSchemaWithProductionRules.safeParse(process.env)
 
 if (!parsed.success) {
   console.error('❌ Ogiltiga miljövariabler i backend/.env:\n')

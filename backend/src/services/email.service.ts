@@ -134,6 +134,41 @@ export async function sendPasswordResetEmail(params: {
   })
 }
 
+/**
+ * Confirms a payment we received.
+ *
+ * Sent from the webhook handler, so it fires when the money actually arrives
+ * rather than when the client clicks "pay" — those are different moments, and
+ * only the second one is true.
+ */
+export async function sendPaymentConfirmationEmail(params: {
+  to: string
+  clientName: string
+  invoiceNumber: string
+  amountOre: number
+  currency: string
+  invoiceId: string
+}): Promise<boolean> {
+  return sendAndLog({
+    to: params.to,
+    type: 'PAYMENT_CONFIRMED',
+    invoiceId: params.invoiceId,
+    subject: `Betalning mottagen — faktura ${params.invoiceNumber}`,
+    text: [
+      `Hej ${params.clientName},`,
+      '',
+      `Tack! Vi har tagit emot din betalning för faktura ${params.invoiceNumber}.`,
+      '',
+      `Belopp: ${formatOre(params.amountOre, params.currency)}`,
+      '',
+      'Fakturan är nu markerad som betald. Du behöver inte göra något mer.',
+      '',
+      'Vänliga hälsningar,',
+      'Fakturly'
+    ].join('\n')
+  })
+}
+
 /** Sent when an invoice is issued. */
 export async function sendInvoiceEmail(params: {
   to: string

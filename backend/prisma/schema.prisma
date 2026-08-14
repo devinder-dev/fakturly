@@ -237,6 +237,41 @@ enum PasswordTokenType {
   RESET
 }
 
+// ─────────────────────────────────────────────────────────────
+// Webhook delivery log — idempotency at the EVENT level
+// ─────────────────────────────────────────────────────────────
+
+/// Stripe guarantees *at least once* delivery, not exactly once. The same
+/// event will arrive twice if our response is slow, if we return a 5xx, or if
+/// a network hiccup loses the acknowledgement — and Stripe retries for days.
+///
+/// Without this table, one payment webhook delivered twice marks the invoice
+/// paid twice and writes two PAYMENT_RECEIVED rows. The ledger then says the
+/// customer paid double.
+///
+/// Stripe's own event id is the primary key, so recording a delivery is a
+/// plain INSERT: if it conflicts, we have already handled this event and can
+/// stop. That check is atomic, which a SELECT-then-INSERT would not be.
+///
+/// Note this is a DIFFERENT concern from Invoice.idempotencyKey, which guards
+/// the payment. This guards the delivery. Both are needed: the same payment
+/// can arrive as two different events, and the same event can be delivered
+/// twice.
+model ProcessedWebhookEvent {
+  /// The provider's event id, e.g. "evt_1abc...". Not a cuid — it is theirs.
+  id String @id
+
+  /// Which provider, so a second one later cannot collide on id format.
+  provider String @default("stripe")
+
+  /// e.g. "checkout.session.completed". Kept for debugging and metrics.
+  type String
+
+  processedAt DateTime @default(now())
+
+  @@index([processedAt])
+}
+
 model PasswordToken {
   id String @id @default(cuid())
 
