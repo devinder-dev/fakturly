@@ -5,7 +5,7 @@
 // here that decides whether a login should succeed, it belongs in the service.
 
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import { loginSchema } from '../validators/auth.validator.ts'
+import { loginSchema, setPasswordSchema } from '../validators/auth.validator.ts'
 import * as authService from '../services/auth.service.ts'
 import { findAuthUserById } from '../repositories/user.repository.ts'
 import { verifyAccessToken, type AccessTokenClaims } from '../services/token.service.ts'
@@ -146,6 +146,28 @@ export async function me(request: FastifyRequest, reply: FastifyReply) {
   return reply.code(200).send({
     user: { id: user.id, email: user.email, role: user.role }
   })
+}
+
+/**
+ * POST /auth/set-password
+ *
+ * Redeems an invite or reset link. Unauthenticated by design — the whole
+ * point is that the caller cannot log in yet.
+ *
+ * The token in the body, not the URL: a token in a query string ends up in
+ * browser history, in the Referer header sent to any third party the page
+ * loads, and in every proxy and server access log along the way.
+ */
+export async function setPassword(request: FastifyRequest, reply: FastifyReply) {
+  const { token, password } = setPasswordSchema.parse(request.body)
+
+  await authService.setPasswordWithToken(token, password, requestContext(request))
+
+  // 204 rather than a session. Setting a password does not log you in —
+  // proving you can read an inbox is not the same as proving you know the
+  // password, and the next step is a normal login through the normal
+  // rate-limited path.
+  return reply.code(204).send()
 }
 
 export async function logout(request: FastifyRequest, reply: FastifyReply) {

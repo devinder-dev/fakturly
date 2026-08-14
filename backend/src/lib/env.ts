@@ -38,7 +38,28 @@ const envSchema = z.object({
   // exist, and an empty string ("") is accepted because we do not require .min(1).
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
-  RESEND_API_KEY: z.string().optional()
+
+  // Email. When RESEND_API_KEY is absent the mailer logs to the console
+  // instead of sending — see lib/resend.ts. That keeps local development and
+  // CI working without an account, and without silently pretending to send.
+  RESEND_API_KEY: z.string().optional(),
+  EMAIL_FROM: z.string().default('Fakturly <onboarding@resend.dev>'),
+
+  /**
+   * How long an invite link stays valid.
+   *
+   * Long, because the recipient was not expecting it: an admin adds a client
+   * on Friday and they read email on Monday. Compare RESET below.
+   */
+  INVITE_TOKEN_DAYS: z.coerce.number().int().positive().default(7),
+
+  /**
+   * How long a password-reset link stays valid.
+   *
+   * Short, because the user requested it and is waiting for it. A reset link
+   * sitting valid in an inbox for a week is a standing key to the account.
+   */
+  RESET_TOKEN_HOURS: z.coerce.number().int().positive().default(2)
 })
 
 // safeParse does not throw — it returns a result we can act on, so we can

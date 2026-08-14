@@ -145,8 +145,16 @@ export function authed(app: FastifyInstance, token: string) {
 export async function cleanupUsers(userIds: string[]): Promise<void> {
   if (userIds.length === 0) return
 
+  // Order matters: every table referencing User must be cleared before the
+  // users themselves, or Postgres refuses with a foreign-key violation.
+  //
+  // This list must grow whenever a new table gains a userId. It has already
+  // caught us once — adding PasswordToken and EmailLog broke three suites
+  // that had nothing to do with invites, which is exactly the signal you want.
   await prisma.auditLog.deleteMany({ where: { userId: { in: userIds } } })
   await prisma.refreshToken.deleteMany({ where: { userId: { in: userIds } } })
+  await prisma.passwordToken.deleteMany({ where: { userId: { in: userIds } } })
+  await prisma.emailLog.deleteMany({ where: { userId: { in: userIds } } })
 
   const clients = await prisma.client.findMany({
     where: { userId: { in: userIds } },

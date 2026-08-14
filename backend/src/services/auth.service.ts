@@ -29,6 +29,7 @@ import {
 import * as userRepository from '../repositories/user.repository.ts'
 import * as refreshTokenRepository from '../repositories/refreshToken.repository.ts'
 import { record, AuditAction, AuditResource } from './audit.service.ts'
+import { redeemPasswordToken } from './passwordToken.service.ts'
 import { InvalidCredentialsError, UnauthenticatedError } from '../lib/errors.ts'
 import type { Role } from '../generated/prisma/client.ts'
 
@@ -329,4 +330,23 @@ export async function logout(
 /** Revokes every session for a user. Used after a password change. */
 export async function logoutEverywhere(userId: string): Promise<number> {
   return refreshTokenRepository.revokeAllForUser(userId)
+}
+
+// ─────────────────────────────────────────────────────────────
+// Setting a password from an invite or reset link
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Redeems a set-password token.
+ *
+ * A thin pass-through to passwordToken.service, so the controller depends on
+ * one auth service rather than reaching across to a second one. The logic
+ * lives there because that is where the token rules are.
+ */
+export async function setPasswordWithToken(
+  token: string,
+  newPassword: string,
+  context: RequestContext = {}
+): Promise<void> {
+  await redeemPasswordToken(token, newPassword, context)
 }

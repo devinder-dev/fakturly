@@ -6,7 +6,11 @@
 import type { FastifyInstance } from 'fastify'
 import * as authController from '../controllers/auth.controller.ts'
 import { authenticate } from '../middleware/authenticate.ts'
-import { LOGIN_RATE_LIMIT, REFRESH_RATE_LIMIT } from '../plugins/rateLimit.ts'
+import {
+  LOGIN_RATE_LIMIT,
+  REFRESH_RATE_LIMIT,
+  SET_PASSWORD_RATE_LIMIT
+} from '../plugins/rateLimit.ts'
 
 export default async function authRoutes(app: FastifyInstance) {
   /**
@@ -48,6 +52,23 @@ export default async function authRoutes(app: FastifyInstance) {
    * worse than any load it could cause.
    */
   app.post('/auth/logout', authController.logout)
+
+  /**
+   * POST /auth/set-password
+   *
+   * Redeems an invite or reset link. Unauthenticated — the caller cannot log
+   * in yet, which is the entire reason this exists.
+   *
+   * Rate limited hard: 5 per 15 minutes per IP. This endpoint runs Argon2id
+   * and an HaveIBeenPwned lookup on every call, and it is the one place where
+   * guessing a token would be worth an attacker's time. 256 bits makes that
+   * hopeless, but there is no reason to let anyone try quickly.
+   */
+  app.post(
+    '/auth/set-password',
+    { config: { rateLimit: SET_PASSWORD_RATE_LIMIT } },
+    authController.setPassword
+  )
 
   /**
    * GET /auth/me — the first genuinely protected route.
