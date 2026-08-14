@@ -11,7 +11,7 @@
 
 import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '../generated/prisma/client.ts'
-import { env, isProduction } from './env.ts'
+import { env, isProduction, isTest } from './env.ts'
 
 // The adapter owns the actual Postgres connection.
 const adapter = new PrismaPg({ connectionString: env.DATABASE_URL })
@@ -22,5 +22,7 @@ export const prisma = new PrismaClient({
   // understanding what Prisma actually does and for spotting N+1 problems.
   // In production we log only real errors (queries would flood the log and
   // can leak sensitive values).
-  log: isProduction ? ['error'] : ['query', 'warn', 'error']
+  // Tests run against a real database; logging every query would bury
+  // the test output and hide the failure you are looking for.
+  log: isProduction || isTest ? ['error'] : ['query', 'warn', 'error']
 })

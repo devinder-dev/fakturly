@@ -5,7 +5,7 @@
 
 import Fastify, { type FastifyInstance } from 'fastify'
 import cookie from '@fastify/cookie'
-import { isProduction } from './lib/env.ts'
+import { isProduction, isTest } from './lib/env.ts'
 import errorHandlerPlugin from './plugins/errorHandler.ts'
 import prismaPlugin from './plugins/prisma.ts'
 import rateLimitPlugin from './plugins/rateLimit.ts'
@@ -33,7 +33,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     // Development wants readable text — but pino-pretty is a dependency we
     // will add only when we actually need it, so the default logger stays.
     logger: {
-      level: isProduction ? 'info' : 'debug',
+      // 'silent' in tests: a request line per inject() would drown the
+      // assertions. Behaviour is unchanged either way.
+      level: isTest ? 'silent' : isProduction ? 'info' : 'debug',
       // NEVER log passwords or tokens, not even by accident.
       // redact replaces these fields with [Redacted] in every log line.
       redact: {

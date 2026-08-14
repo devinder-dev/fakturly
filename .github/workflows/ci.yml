@@ -1,0 +1,137 @@
+name: CI
+
+# The second safety net. The typecheck hook catches things while code is
+# being written; this catches whatever reaches a branch — including the case
+# where someone (or some tool) skipped the local checks entirely.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch cancels the previous run. No point spending
+# minutes verifying a commit that has already been replaced.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+
+    # Tests run against a REAL Postgres and Redis, not mocks. Almost
+    # everything that can go wrong in this codebase happens at that boundary:
+    # a transaction that must roll back, a unique constraint, an atomic
+    # counter under concurrency, a TTL expiring. A mock would cheerfully
+    # confirm behaviour the real database does not have.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: devinder
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: fakturly
+        ports:
+          - 5432:5432
+        # Without a health check the job races the database and fails
+        # intermittently — the worst kind of CI failure, because it teaches
+        # people to hit "re-run" instead of reading the error.
+        options: >-
+          --health-cmd "pg_isready -U devinder -d fakturly"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://devinder:secret@localhost:5432/fakturly
+      REDIS_URL: redis://localhost:6379
+      # CI-only value. The real secret is never in this file, and never in
+      # the repository — this one exists purely so tokens can be signed.
+      JWT_SECRET: ci_only_secret_that_is_at_least_32_characters_long
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: backend
+        # --frozen-lockfile fails if bun.lock disagrees with package.json,
+        # so CI tests the dependency tree that is committed rather than
+        # silently resolving a newer one.
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        working-directory: backend
+        # Required: the generated client is gitignored, so it does not exist
+        # on a fresh checkout. (It has also caught us twice locally, where
+        # migrate dev did not regenerate it.)
+        run: bunx prisma generate
+
+      - name: Apply migrations
+        working-directory: backend
+        # deploy, not dev: it applies committed migrations and never tries to
+        # author a new one. A migration appearing during CI would mean the
+        # schema and the migration folder had drifted.
+        run: bunx prisma migrate deploy
+
+      - name: Verify schema matches migrations
+        working-directory: backend
+        # Catches a schema.prisma edited without a migration — which works
+        # locally against a hand-modified database and then fails on deploy.
+        run: bunx prisma migrate status
+
+      - name: Typecheck
+        working-directory: backend
+        run: bun run typecheck
+
+      - name: Test
+        working-directory: backend
+        # SKIP_NETWORK_TESTS keeps the live HaveIBeenPwned calls out of CI.
+        # They are valuable locally, but a third party's availability must
+        # not decide whether our build is green.
+        env:
+          SKIP_NETWORK_TESTS: '1'
+        run: bun test
+
+  # Separate job so a failure here reads as "secret committed" rather than
+  # being buried among test output.
+  secrets:
+    name: No secrets committed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for committed .env files
+        run: |
+          if git ls-files | grep -E '(^|/)\.env$'; then
+            echo "::error::A .env file is committed. Remove it and rotate the credentials."
+            exit 1
+          fi
+          echo "No .env files tracked."
+
+      - name: Check for obvious live keys
+        run: |
+          # Deliberately narrow: real Stripe live keys and private key blocks.
+          # A broad "password" grep would fire on every comment and get
+          # ignored, which is worse than no check at all.
+          if git grep -nE 'sk_live_[0-9a-zA-Z]{20,}|BEGIN (RSA |EC )?PRIVATE KEY' -- . ':(exclude)*.lock'; then
+            echo "::error::A live key looks committed. Rotate it immediately."
+            exit 1
+          fi
+          echo "No live keys found."
