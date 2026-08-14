@@ -55,5 +55,18 @@ if (!parsed.success) {
 // parsed.data is now fully typed: env.PORT is a number, env.NODE_ENV a union.
 export const env = parsed.data
 
-// Convenience helper — used later for Secure cookies and log levels.
+// Convenience helpers — used for Secure cookies and log levels.
 export const isProduction = env.NODE_ENV === 'production'
+
+/**
+ * True when running under the test runner.
+ *
+ * Used only to silence logging. Tests run against a real database, and every
+ * Prisma query plus every Fastify request line would bury the actual test
+ * output — which makes a genuine failure hard to find, and a noisy suite is
+ * a suite people stop reading.
+ *
+ * Nothing about behaviour changes in test mode. A test that only passes
+ * because it is a test is worthless.
+ */
+export const isTest = env.NODE_ENV === 'test' || process.env.BUN_TEST === '1'

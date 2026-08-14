@@ -58,23 +58,56 @@ model Client {
 // ─────────────────────────────────────────────────────────────
 
 model Invoice {
-  id              String        @id @default(cuid())
-  invoiceNumber   String        @unique
-  clientId        String
-  client          Client        @relation(fields: [clientId], references: [id])
-  amount          Int // öre (1 SEK = 100 öre) — ALDRIG Float för pengar
-  currency        String        @default("SEK")
-  status          InvoiceStatus @default(DRAFT)
-  dueDate         DateTime
-  paidAt          DateTime?
-  lateFeeOre      Int           @default(0) // förseningsavgift, också i öre
+  id            String @id @default(cuid())
+  // Unbroken series required by bokföringslagen. Format: "2026-0001".
+  // Generated from InvoiceNumberSeries, never supplied by the caller.
+  invoiceNumber String @unique
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id])
+
+  currency String        @default("SEK")
+  status   InvoiceStatus @default(DRAFT)
+
+  // Three totals, all in öre, all derived from the line items.
+  // A Swedish invoice must state net, VAT and gross separately — showing
+  // only the total is not legally sufficient.
+  netTotalOre   Int @default(0) // excluding VAT
+  vatTotalOre   Int @default(0) // the VAT itself
+  grossTotalOre Int @default(0) // what the client actually pays
+
+  lateFeeOre Int @default(0) // förseningsavgift, also in öre
+
+  issueDate DateTime  @default(now()) // fakturadatum — required on the invoice
+  dueDate   DateTime
+  sentAt    DateTime? // set once; after this the invoice is frozen
+  paidAt    DateTime?
+
   stripePaymentId String?
-  idempotencyKey  String?       @unique // hindrar dubbla betalningar
+  idempotencyKey  String?       @unique // prevents double payment processing
   items           InvoiceItem[]
   transactions    Transaction[]
   emailLogs       EmailLog[]
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
+
+  @@index([clientId, status]) // "this client's unpaid invoices"
+  @@index([status, dueDate]) // the nightly overdue job
+}
+
+// Per-year invoice numbering.
+//
+// Why a table rather than a Postgres sequence: a sequence cannot reset each
+// year without running DDL at runtime. This row is incremented with a single
+// atomic INSERT ... ON CONFLICT DO UPDATE ... RETURNING, which holds no long
+// lock and does not serialise invoice creation.
+//
+// Gaps are possible if the surrounding transaction rolls back — the same
+// property a sequence has. That is acceptable and explainable; what the law
+// requires is that numbers are not reused or silently removed.
+model InvoiceNumberSeries {
+  year       Int @id
+  lastNumber Int @default(0)
 }
 
 enum InvoiceStatus {
@@ -85,13 +118,36 @@ enum InvoiceStatus {
 }
 
 model InvoiceItem {
-  id           String  @id @default(cuid())
-  invoiceId    String
-  invoice      Invoice @relation(fields: [invoiceId], references: [id])
+  id        String  @id @default(cuid())
+  invoiceId String
+  // Cascade: deleting a DRAFT invoice removes its lines. A sent invoice can
+  // never be deleted, so this only ever fires on drafts.
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
   description  String
   quantity     Int
-  unitPriceOre Int // styckpris i öre
-  totalOre     Int // radtotal i öre
+  unitPriceOre Int // unit price in öre, EXCLUDING VAT
+
+  // VAT rate in basis points: 2500 = 25.00%.
+  //
+  // Per line, not per invoice, because one invoice legitimately mixes rates —
+  // consulting at 25% and a book at 6% on the same document.
+  //
+  // Basis points rather than a decimal, for the same reason money is öre:
+  // 0.25 cannot be represented exactly in binary floating point.
+  vatRate Int
+
+  // All three stored rather than computed on read. An invoice is a financial
+  // record: what it said when it was issued must not change because a
+  // calculation was later corrected.
+  netOre   Int // quantity * unitPriceOre
+  vatOre   Int // rounded to whole öre, per line
+  grossOre Int // netOre + vatOre
+
+  /// Display order on the invoice.
+  position Int @default(0)
+
+  @@index([invoiceId])
 }
 
 // ─────────────────────────────────────────────────────────────

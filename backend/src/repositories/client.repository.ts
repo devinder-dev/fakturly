@@ -68,9 +68,85 @@ export async function createClientWithUser(
   })
 }
 
-export async function findClientByUserId(userId: string) {
-  return prisma.client.findUnique({
-    where: { userId },
-    select: { id: true, name: true, email: true, phone: true, address: true }
+/** The fields every client endpoint returns. One definition, so no endpoint
+ *  accidentally leaks a column added to the model later. */
+const clientSelect = {
+  id: true,
+  userId: true,
+  name: true,
+  email: true,
+  phone: true,
+  address: true,
+  createdAt: true
+} as const
+
+export type ClientRecord = {
+  id: string
+  userId: string
+  name: string
+  email: string
+  phone: string | null
+  address: string | null
+  createdAt: Date
+}
+
+export async function findClientByUserId(userId: string): Promise<ClientRecord | null> {
+  return prisma.client.findUnique({ where: { userId }, select: clientSelect })
+}
+
+export async function findClientById(id: string): Promise<ClientRecord | null> {
+  return prisma.client.findUnique({ where: { id }, select: clientSelect })
+}
+
+export type ListClientsResult = {
+  clients: ClientRecord[]
+  total: number
+}
+
+/**
+ * Lists clients, newest first.
+ *
+ * The count runs in the same transaction as the page, so `total` cannot
+ * describe a different set of rows than the one returned — without that,
+ * a client created between the two queries makes the pagination inconsistent.
+ */
+export async function listClients(
+  limit: number,
+  offset: number
+): Promise<ListClientsResult> {
+  const [clients, total] = await prisma.$transaction([
+    prisma.client.findMany({
+      select: clientSelect,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      skip: offset
+    }),
+    prisma.client.count()
+  ])
+
+  return { clients, total }
+}
+
+export type UpdateClientData = {
+  name?: string | undefined
+  phone?: string | null | undefined
+  address?: string | null | undefined
+}
+
+export async function updateClient(
+  id: string,
+  data: UpdateClientData
+): Promise<ClientRecord> {
+  return prisma.client.update({
+    where: { id },
+    // Only the three fields we allow. Passing the request body straight
+    // through would be mass assignment — a caller adding "userId" would
+    // repoint the client at somebody else's login account.
+    data: {
+      ...(data.name !== undefined ? { name: data.name } : {}),
+      ...(data.phone !== undefined ? { phone: data.phone } : {}),
+      ...(data.address !== undefined ? { address: data.address } : {})
+    },
+    select: clientSelect
   })
 }

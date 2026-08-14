@@ -20,9 +20,10 @@ Not a CRUD tutorial — every decision is documented with its reasoning and the 
 ---
 
 > [!NOTE]
-> **Actively being built.** The backend foundation and the full authentication
-> layer are complete and tested. [Status](#-status) lists precisely what works
-> today — no feature is claimed before it runs.
+> **Actively being built.** Authentication and invoicing are complete and
+> tested — an admin can provision a customer, issue a VAT-correct invoice and
+> send it, and the customer can see only their own. [Status](#-status) lists
+> precisely what works today; no feature is claimed before it runs.
 >
 > 📖 **[Auth phase walkthrough](docs/auth-phase-walkthrough.md)** — every
 > decision, with flow diagrams and a plain-English version.
@@ -42,7 +43,7 @@ make an audit impossible. And answering differently for "no such user" than for
 "wrong password" lets anyone enumerate your customers with a script.
 
 Fakturly is an attempt to get these right, and — more importantly — to
-understand **why** each rule exists. The reasoning behind all 21 decisions is
+understand **why** each rule exists. The reasoning behind all 28 decisions is
 written down in [`docs/architecture-decisions.md`](docs/architecture-decisions.md).
 
 ## Architecture
@@ -174,15 +175,27 @@ which one was ours. In testing, `password` came back with **52,372,427** hits.
 | `authenticate` / `authorize` middleware, Redis denylist | ✅ |
 | Audit logging | ✅ |
 | Admin seed + atomic client provisioning | ✅ |
+| Client CRUD with ownership (IDOR) checks | ✅ |
+| VAT per line item, mixed rates, exact öre arithmetic | ✅ |
+| Invoice numbering — unbroken series, concurrency-safe | ✅ |
+| Invoice creation, reads, send, immutable ledger | ✅ |
+| CI: typecheck, migrations, full suite on every push | ✅ |
 | Set-password invite email | 🔨 week 3 |
-| Client + invoice CRUD | ⏳ next |
-| Stripe payments, background jobs | ⏳ planned |
+| Stripe payments, background jobs, late fees | ⏳ next |
 | React frontend, PDF invoices | ⏳ planned |
 
-**183 assertions** pass across 7 suites, zero failures — including live
-HaveIBeenPwned calls, a measured timing-attack defence (10.2 ms vs 10.3 ms),
-a forced transaction rollback, and a real refresh-token replay triggering
-family-wide revocation.
+**223 tests / 466 assertions** pass across 11 suites, zero failures, and run in
+CI against a real PostgreSQL and Redis on every push.
+
+```bash
+cd backend && bun test
+```
+
+Highlights: a measured timing-attack defence (10.2 ms vs 10.3 ms), live
+HaveIBeenPwned calls, a forced transaction rollback leaving neither row, a
+refresh-token replay triggering family-wide revocation, 50 concurrent invoice
+numbers forming an unbroken series, and a credit note cancelling its original
+to exactly zero.
 
 ## Quick start
 

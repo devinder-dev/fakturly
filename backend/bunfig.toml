@@ -1,0 +1,11 @@
+# bunfig.toml — Bun configuration.
+
+[test]
+# Preloaded before any test file. Owns the single teardown of the shared
+# Prisma and Redis connections — see tests/setup.ts for why that cannot
+# live in the individual files.
+preload = ["./tests/setup.ts"]
+
+# Integration tests talk to a real Postgres and Redis. The default 5s is
+# tight for Argon2id hashing plus a round trip, especially on CI runners.
+timeout = 30000
