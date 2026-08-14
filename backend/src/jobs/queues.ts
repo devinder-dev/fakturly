@@ -37,11 +37,27 @@ export const bullConnection: ConnectionOptions = {
   maxRetriesPerRequest: null
 }
 
-/** Queue names, in one place so a typo cannot silently create a second queue. */
+/**
+ * Queue names, in one place so a typo cannot silently create a second queue.
+ *
+ * NO COLONS. BullMQ rejects them at construction — it builds its own Redis
+ * keys as `prefix:queueName:...`, so a colon in the name would corrupt that
+ * structure. Namespacing goes in `prefix` below instead.
+ *
+ * Worth knowing because the failure is at RUNTIME, not compile time, and only
+ * when a worker or queue is actually constructed. Our queues are created
+ * lazily, so the whole test suite passed while the server could not boot.
+ */
 export const QueueName = {
-  OVERDUE: 'fakturly:overdue',
-  EMAIL: 'fakturly:email'
+  OVERDUE: 'overdue',
+  EMAIL: 'email'
 } as const
+
+/**
+ * Keeps BullMQ's keys under one namespace in Redis, alongside
+ * `fakturly:rl:*`, `fakturly:denylist:*` and the rest.
+ */
+export const QUEUE_PREFIX = 'fakturly'
 
 export type OverdueJobData = {
   /** ISO date. Passed in so a run can be replayed for a specific day. */
@@ -82,6 +98,7 @@ let emailQueue: Queue<EmailJobData> | null = null
 export function getOverdueQueue(): Queue<OverdueJobData> {
   overdueQueue ??= new Queue<OverdueJobData>(QueueName.OVERDUE, {
     connection: bullConnection,
+    prefix: QUEUE_PREFIX,
     defaultJobOptions
   })
   return overdueQueue
@@ -90,6 +107,7 @@ export function getOverdueQueue(): Queue<OverdueJobData> {
 export function getEmailQueue(): Queue<EmailJobData> {
   emailQueue ??= new Queue<EmailJobData>(QueueName.EMAIL, {
     connection: bullConnection,
+    prefix: QUEUE_PREFIX,
     defaultJobOptions
   })
   return emailQueue

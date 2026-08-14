@@ -10,6 +10,7 @@ import { runOverdueCheck } from '../../services/overdue.service.ts'
 import {
   QueueName,
   bullConnection,
+  QUEUE_PREFIX,
   getEmailQueue,
   type OverdueJobData
 } from '../queues.ts'
@@ -52,6 +53,9 @@ export async function processOverdueJob(job: Job<OverdueJobData>) {
 export function startOverdueWorker(): Worker<OverdueJobData> {
   const worker = new Worker<OverdueJobData>(QueueName.OVERDUE, processOverdueJob, {
     connection: bullConnection,
+    // MUST match the queue's prefix, or the worker listens to a key space
+    // nothing writes to — and sits there processing nothing, silently.
+    prefix: QUEUE_PREFIX,
     concurrency: 1
   })
 
