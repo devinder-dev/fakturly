@@ -155,7 +155,76 @@ export function formatOre(ore: number, currency = 'SEK'): string {
  * Applied to gross rather than net because that is the amount actually
  * outstanding — the client owes the VAT too, and it is the unpaid sum that
  * accrues the fee.
+ *
+ * Kept as a primitive; the Swedish statutory model below is what actually
+ * gets used.
  */
 export function calculateLateFee(grossTotalOre: number, rateBasisPoints: number): number {
   return roundOre((grossTotalOre * rateBasisPoints) / 10_000)
+}
+
+// ─────────────────────────────────────────────────────────────
+// Dröjsmålsränta — Swedish statutory late payment interest
+// ─────────────────────────────────────────────────────────────
+//
+// Räntelagen (1975:635) § 6: interest accrues at the Riksbank's referensränta
+// plus 8 percentage points, per year, from the due date.
+//
+// This replaces the flat 10% originally planned. A flat percentage is a
+// PENALTY, not interest: it does not grow with the delay, and a penalty
+// clause that was never contractually agreed is generally unenforceable. It
+// also under-charges a debtor who is a year late and over-charges one who is
+// a day late.
+
+/**
+ * The Riksbank reference rate, in basis points.
+ *
+ * Set twice a year, so it is configuration rather than a constant. It lives
+ * here with a date so that anyone reading knows how stale it might be —
+ * a hardcoded rate with no provenance is worse than one you can check.
+ *
+ * Last updated: 2026-08-14. Verify against riksbank.se before relying on it.
+ */
+export const REFERENCE_RATE_BASIS_POINTS = 200 // 2.00%
+
+/** Räntelagen adds 8 percentage points to the reference rate. */
+export const LATE_INTEREST_MARKUP_BASIS_POINTS = 800
+
+/**
+ * Statutory reminder fee — lagstadgad påminnelseavgift.
+ *
+ * 60 SEK, fixed by lag (1981:739) om ersättning för inkassokostnader. Charged
+ * per reminder, and only if the right to charge it was stated on the invoice.
+ */
+export const REMINDER_FEE_ORE = 6_000
+
+/**
+ * Interest owed on an overdue invoice, for a given number of days.
+ *
+ * Deliberately takes `daysLate` rather than computing it from dates: a pure
+ * function of numbers is trivially testable, and the caller already knows
+ * which two dates it is comparing.
+ *
+ * Uses a 365-day year. Räntelagen does not mandate a day-count convention,
+ * and 365 (rather than 360) is the common Swedish practice.
+ */
+export function calculateLateInterest(
+  outstandingOre: number,
+  daysLate: number,
+  referenceRateBasisPoints = REFERENCE_RATE_BASIS_POINTS
+): number {
+  if (daysLate <= 0 || outstandingOre <= 0) return 0
+
+  const annualRate = referenceRateBasisPoints + LATE_INTEREST_MARKUP_BASIS_POINTS
+
+  // Split the division to keep the intermediate value small. Multiplying an
+  // öre amount by rate AND by days before dividing would push a large invoice
+  // toward the limit of exact integer representation.
+  return roundOre((outstandingOre * annualRate * daysLate) / 10_000 / 365)
+}
+
+/** Whole days between two dates, floored. Never negative. */
+export function daysBetween(from: Date, to: Date): number {
+  const ms = to.getTime() - from.getTime()
+  return Math.max(0, Math.floor(ms / (24 * 60 * 60 * 1000)))
 }

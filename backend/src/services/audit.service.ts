@@ -40,7 +40,9 @@ export const AuditAction = {
   INVOICE_DELETED: 'INVOICE_DELETED',
   PAYMENT_LINK_CREATED: 'PAYMENT_LINK_CREATED',
   /** No acting user — Stripe told us, not a person. */
-  PAYMENT_RECEIVED: 'PAYMENT_RECEIVED'
+  PAYMENT_RECEIVED: 'PAYMENT_RECEIVED',
+  /** No acting user — the scheduler, not a person. */
+  INVOICE_OVERDUE: 'INVOICE_OVERDUE'
 } as const
 
 export type AuditActionType = (typeof AuditAction)[keyof typeof AuditAction]

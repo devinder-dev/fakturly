@@ -135,6 +135,87 @@ export async function sendPasswordResetEmail(params: {
 }
 
 /**
+ * A gentle nudge before or around the due date.
+ *
+ * Deliberately does not mention consequences. This is the "you may have
+ * missed this" email, and treating a customer as delinquent before they
+ * actually are is how you lose one.
+ */
+export async function sendReminderEmail(params: {
+  to: string
+  clientName: string
+  invoiceNumber: string
+  amountOre: number
+  currency: string
+  dueDate: Date
+  invoiceId: string
+}): Promise<boolean> {
+  return sendAndLog({
+    to: params.to,
+    type: 'REMINDER',
+    invoiceId: params.invoiceId,
+    subject: `Påminnelse: faktura ${params.invoiceNumber}`,
+    text: [
+      `Hej ${params.clientName},`,
+      '',
+      `En vänlig påminnelse om faktura ${params.invoiceNumber}.`,
+      '',
+      `Belopp: ${formatOre(params.amountOre, params.currency)}`,
+      `Förfallodatum: ${params.dueDate.toLocaleDateString('sv-SE')}`,
+      '',
+      'Har du redan betalat kan du bortse från det här mejlet.',
+      '',
+      'Vänliga hälsningar,',
+      'Fakturly'
+    ].join('\n')
+  })
+}
+
+/**
+ * Sent once, when an invoice first becomes overdue.
+ *
+ * States the interest explicitly rather than just the new total. A customer
+ * who sees a number that changed without explanation disputes it; one who can
+ * read where it came from usually pays it.
+ */
+export async function sendOverdueNoticeEmail(params: {
+  to: string
+  clientName: string
+  invoiceNumber: string
+  amountOre: number
+  lateFeeOre: number
+  currency: string
+  dueDate: Date
+  invoiceId: string
+}): Promise<boolean> {
+  return sendAndLog({
+    to: params.to,
+    type: 'OVERDUE_NOTICE',
+    invoiceId: params.invoiceId,
+    subject: `Förfallen faktura ${params.invoiceNumber}`,
+    text: [
+      `Hej ${params.clientName},`,
+      '',
+      `Faktura ${params.invoiceNumber} förföll ${params.dueDate.toLocaleDateString('sv-SE')}`,
+      'och är ännu inte betald.',
+      '',
+      `Att betala: ${formatOre(params.amountOre, params.currency)}`,
+      ...(params.lateFeeOre > 0
+        ? [`varav dröjsmålsränta: ${formatOre(params.lateFeeOre, params.currency)}`]
+        : []),
+      '',
+      'Dröjsmålsränta utgår enligt räntelagen med referensräntan plus åtta',
+      'procentenheter och löper per dag tills betalning sker.',
+      '',
+      'Har du redan betalat, eller stämmer något inte, hör gärna av dig.',
+      '',
+      'Vänliga hälsningar,',
+      'Fakturly'
+    ].join('\n')
+  })
+}
+
+/**
  * Confirms a payment we received.
  *
  * Sent from the webhook handler, so it fires when the money actually arrives

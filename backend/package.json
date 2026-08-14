@@ -20,11 +20,13 @@
     "@node-rs/argon2": "^2.0.2",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
+    "bullmq": "^6.1.1",
     "dotenv": "^17.4.2",
     "fast-jwt": "^6.3.2",
     "fastify": "^5.2.0",
     "fastify-plugin": "^6.0.0",
     "ioredis": "^5.11.1",
+    "node-cron": "^4.6.0",
     "pg": "^8.22.0",
     "resend": "^6.20.0",
     "stripe": "^22.5.0",
@@ -32,6 +34,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/node-cron": "^3.0.11",
     "prisma": "^7.8.0",
     "typescript": "^5.7.0"
   }
