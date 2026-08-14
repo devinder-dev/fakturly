@@ -4,11 +4,14 @@
 // fake requests without ever opening a real port.
 
 import Fastify, { type FastifyInstance } from 'fastify'
+import cookie from '@fastify/cookie'
 import { isProduction } from './lib/env.ts'
 import errorHandlerPlugin from './plugins/errorHandler.ts'
 import prismaPlugin from './plugins/prisma.ts'
 import rateLimitPlugin from './plugins/rateLimit.ts'
 import redisPlugin from './plugins/redis.ts'
+import authRoutes from './routes/auth.routes.ts'
+import clientRoutes from './routes/clients.routes.ts'
 
 // buildApp creates a fresh app every time it is called.
 // Tests want a clean app each run — hence a function, not a module-level app.
@@ -63,6 +66,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   // request in production.
   await app.register(rateLimitPlugin)
 
+  // Cookie parsing — the refresh token travels as an httpOnly cookie, so
+  // this must be loaded before any route that reads request.cookies.
+  await app.register(cookie)
+
   // ── Only from HERE may routes be declared ──────────────────────
   // Everything above is fully loaded, so every route below sees all hooks
   // (rate limiting, error handling) from its very first request.
@@ -90,7 +97,13 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
   })
 
-  // Auth routes, invoices and clients get registered here later.
+  // Auth: login, refresh, logout, me.
+  await app.register(authRoutes)
+
+  // Client provisioning (admin only).
+  await app.register(clientRoutes)
+
+  // Invoices get registered here later.
 
   return app
 }
