@@ -459,6 +459,130 @@ decision 21.
 
 ---
 
+## 29. Late fees follow räntelagen, not a flat percentage
+
+*Changed 2026-08-14. The original plan was 10% of the invoice.*
+
+**Decision:** Dröjsmålsränta at referensränta + 8 percentage points, annual,
+accruing per day from the due date. Räntelagen (1975:635) § 6.
+
+**Why the flat percentage was wrong:** it does not grow with the delay. The
+same 1 250 kr whether the customer is one day late or two years. That is a
+**penalty**, not interest — and a penalty clause never contractually agreed is
+generally unenforceable. It also under-charges the debtor who is a year late
+and over-charges the one who is a day late.
+
+30 days late is 102,74 kr on a 12 500 kr invoice. 400 days is 1 369,86 kr.
+
+**The reference rate lives in `money.ts` with the date it was last checked**,
+because the Riksbank changes it twice a year. A hardcoded rate with no
+provenance is worse than one you can verify.
+
+---
+
+## 30. Interest accrues; each accrual is its own ledger row
+
+**Decision:** The daily job charges only the **increment** since the last run,
+and writes a `LATE_FEE_ADDED` row for it.
+
+**Why not the total each run:** the job runs daily. Charging the full accrued
+interest every time would compound it into nonsense within a week.
+
+**Why one row per accrual:** the rows sum exactly to the fee shown on the
+invoice, so the figure is explainable line by line. A customer who sees a
+number that changed without explanation disputes it; one who can read where it
+came from usually pays it. Verified by asserting the sum.
+
+---
+
+## 31. `runOverdueCheck` takes the clock as an argument
+
+**Decision:** `runOverdueCheck(now: Date)` rather than reading `new Date()`
+internally.
+
+**Why:** it is the difference between "what happens 400 days late" being a
+one-line test and being a test nobody can write. A job whose behaviour depends
+on a hidden clock can only be tested by waiting or by mocking time globally,
+and neither produces a test anyone trusts.
+
+---
+
+## 32. cron enqueues; BullMQ executes
+
+**Decision:** node-cron only adds a job to a queue. BullMQ owns execution,
+with retries, backoff and a record of every attempt.
+
+**Why not cron alone:** a job that throws is simply gone. No retry, no record,
+no way to know. "Late fees silently stopped being applied" is a revenue
+problem nobody notices for a month.
+
+**Scheduled at 02:00 Europe/Stockholm**, not midnight: interest is counted in
+whole days from the due date, so a run landing on the wrong side of midnight
+charges a day too many or too few.
+
+---
+
+## 33. BullMQ gets its own Redis connection
+
+**Decision:** A separate connection with `maxRetriesPerRequest: null`.
+
+**Why:** workers BLOCK — BullMQ waits for jobs with blocking commands that
+occupy the connection entirely. Sharing the app's connection would stall every
+rate-limit check behind an idle worker. And the two have opposite needs: a
+request should fail fast, a worker should wait through a blip.
+
+**Related gotcha, found by a smoke test:** BullMQ rejects a colon in a queue
+name, because it builds its own keys as `prefix:queueName:...`. Namespacing
+goes in `prefix`. The failure is at construction, at runtime — and because our
+queues are created lazily, 287 tests passed while the server could not boot.
+
+---
+
+## 34. Three layers of webhook idempotency
+
+**Context:** Stripe guarantees *at least once* delivery and retries for days.
+
+**Decision:**
+
+1. `ProcessedWebhookEvent` claims Stripe's event id as a primary key. One
+   INSERT; a conflict means we have seen it. **Atomic** — a SELECT-then-INSERT
+   would let two simultaneous retries both find no row and both proceed.
+2. `markPaid` matches only `SENT` or `OVERDUE`, so the same payment arriving
+   as a *different* event still cannot be applied twice.
+3. Unhandled event types return 200, so Stripe stops retrying things we will
+   never act on.
+
+Layers 1 and 2 are genuinely separate: the same payment can arrive as two
+events, and the same event can be delivered twice.
+
+**The claim happens before the work.** Recording afterwards would let a crash
+in between turn the retry into a double payment.
+
+Verified with five concurrent deliveries of one event producing exactly one
+`PAYMENT_RECEIVED` row.
+
+---
+
+## 35. External providers sit behind a stub-capable boundary
+
+**Decision:** `lib/mailer.ts` and `lib/stripe.ts` each have a real path and a
+stub path behind one interface. Nothing above `lib/` knows which is active.
+
+**Why:** the whole payment and email flow can be built and tested without an
+account, and turning on the real thing is a configuration change rather than a
+code change.
+
+**The stubs are not no-ops.** The Stripe stub signs and verifies with the same
+HMAC-SHA256 scheme Stripe uses, so the signature path — including rejection of
+a forged one — is genuinely exercised. A stub that accepted anything would
+leave the most important check in the payment flow untested until production.
+
+**Production cannot run on stubs:** `env.ts` refuses to boot without the real
+keys when `NODE_ENV=production`. A convenience that can ship by accident is
+not a convenience.
+
+---
+
 ## Open decisions
 
 | Question | Status |

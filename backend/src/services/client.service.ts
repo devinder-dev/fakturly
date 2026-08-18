@@ -8,6 +8,8 @@
 // through a registration endpoint that answers differently for taken emails.
 
 import { generateTemporaryPassword, hashPassword } from './password.service.ts'
+import { issuePasswordToken, buildSetPasswordUrl } from './passwordToken.service.ts'
+import { sendInviteEmail } from './email.service.ts'
 import { record, AuditAction, AuditResource } from './audit.service.ts'
 import * as clientRepository from '../repositories/client.repository.ts'
 import type {
@@ -73,6 +75,31 @@ export async function createClient(
     email: input.email,
     ipAddress: context.ip,
     userAgent: context.userAgent
+  })
+
+  // ── The invite ───────────────────────────────────────────────
+  //
+  // Deliberately AFTER the client exists and outside its transaction. If
+  // sending fails, the client is still created and the invite can be resent;
+  // rolling back a customer because a mail server was briefly down would be
+  // absurd. sendInviteEmail never throws, and records the attempt either way.
+  const invite = await issuePasswordToken(created.userId, 'INVITE')
+
+  await sendInviteEmail({
+    to: created.email,
+    clientName: created.name,
+    setPasswordUrl: buildSetPasswordUrl(invite.token),
+    expiresAt: invite.expiresAt,
+    userId: created.userId
+  })
+
+  await record({
+    action: AuditAction.INVITE_SENT,
+    resource: AuditResource.USER,
+    userId: actingAdminId,
+    resourceId: created.userId,
+    email: created.email,
+    ipAddress: context.ip
   })
 
   return created

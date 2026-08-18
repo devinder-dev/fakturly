@@ -12,23 +12,22 @@ Not a CRUD tutorial — every decision is documented with its reasoning and the 
 [![Prisma](https://img.shields.io/badge/Prisma-7-2D3748?logo=prisma&logoColor=white)](https://www.prisma.io)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org)
 [![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](https://redis.io)
+[![CI](https://github.com/devinder-dev/fakturly/actions/workflows/ci.yml/badge.svg)](https://github.com/devinder-dev/fakturly/actions/workflows/ci.yml)
 
-**[📐 Architecture Decision Record](docs/architecture-decisions.md)** — the most interesting file in this repo
+**[📐 Architecture Decision Record](docs/architecture-decisions.md)** · **[📖 Auth walkthrough](docs/auth-phase-walkthrough.md)** · **[🔌 Integrations](docs/integrations.md)**
 
 </div>
 
 ---
 
 > [!NOTE]
-> **Actively being built.** Authentication and invoicing are complete and
-> tested — an admin can provision a customer, issue a VAT-correct invoice and
-> send it, and the customer can see only their own. [Status](#-status) lists
-> precisely what works today; no feature is claimed before it runs.
->
-> 📖 **[Auth phase walkthrough](docs/auth-phase-walkthrough.md)** — every
-> decision, with flow diagrams and a plain-English version.
+> **Actively being built.** Auth and invoicing are done and tested — an admin
+> can provision a customer, issue a VAT-correct invoice, and the customer sees
+> only their own, Stripe payments settle invoices, and overdue interest
+> accrues nightly. The frontend is next. See
+> **[Status](#-status)** — no feature is claimed here before it runs.
 
-## Why this project exists
+## Why this exists
 
 Most invoicing tutorials get three things wrong that matter enormously in production:
 
@@ -38,13 +37,45 @@ await prisma.invoice.delete({ ... })   // deleted ledger rows break audits
 if (!user) return res.status(404)      // leaks your entire customer list
 ```
 
-Floating point can't represent `0.1 + 0.2` exactly. Deleted financial records
-make an audit impossible. And answering differently for "no such user" than for
-"wrong password" lets anyone enumerate your customers with a script.
+Fakturly is an attempt to get these right — and to understand *why* each rule
+exists. All 28 decisions, and the alternative rejected for each, are in
+[`docs/architecture-decisions.md`](docs/architecture-decisions.md).
 
-Fakturly is an attempt to get these right, and — more importantly — to
-understand **why** each rule exists. The reasoning behind all 28 decisions is
-written down in [`docs/architecture-decisions.md`](docs/architecture-decisions.md).
+## How it works
+
+The flow below is what's actually implemented today — admin login through
+invoice creation. Payment collection is the next piece being built.
+
+```mermaid
+sequenceDiagram
+    actor Admin
+    actor Client
+    participant API as Fastify API
+    participant DB as PostgreSQL
+    participant Redis
+    participant Resend
+
+    Admin->>API: POST /auth/login
+    API->>Redis: rate limit + lockout check
+    API->>DB: verify Argon2id hash (constant-time either way)
+    API-->>Admin: access token (15 min) + refresh token (rotating)
+
+    Admin->>API: POST /clients
+    API->>DB: create User + Client in one transaction
+    API->>Resend: send set-password invite link
+    API->>DB: AuditLog entry
+
+    Admin->>API: POST /invoices
+    API->>DB: reserve next invoice number (concurrency-safe series)
+    API->>DB: create Invoice + line items — VAT per line, exact öre math
+    API->>DB: AuditLog entry
+
+    Client->>API: GET /invoices
+    API->>DB: ownership check — a client only ever sees their own
+    API-->>Client: invoice list
+
+    Note over API,DB: Stripe payment + webhook + automatic late fees — next up
+```
 
 ## Architecture
 
@@ -69,95 +100,10 @@ flowchart TD
     Stripe["Stripe webhook"] -->|signed| R
 ```
 
-**Each layer may only call the one below it.** Services take plain arguments and
-never touch `request` — which is what allows the overdue-invoice job to reuse the
-exact same business logic from a BullMQ worker, where no HTTP request exists.
-
-## Four principles the code actually follows
-
-### 1. Money is never a float
-
-Every amount is an integer count of *öre* (1 SEK = 100 öre), named so the unit
-is unmistakable: `amountOre`, `unitPriceOre`, `lateFeeOre`.
-
-```ts
-amount: 9999   // 99.99 SEK, exact, always
-```
-
-Conversion happens only at the display edge. Never in business logic.
-
-### 2. Financial history is append-only
-
-`Transaction` and `AuditLog` rows are never updated or deleted. A correction is
-a **new** row with a negative amount:
-
-```ts
-await prisma.transaction.create({
-  type: 'ADJUSTMENT',
-  amountOre: -500,
-  description: 'Rättelse för faktura #123'
-})
-```
-
-If a row can be edited, history is not evidence.
-
-### 3. Every auth failure looks identical
-
-Wrong password, unknown email, and locked account return the same status, the
-same message, and take the same amount of time. This is enforced *structurally*
-— `AccountLockedError` and `InvalidCredentialsError` produce byte-identical
-responses, so no future refactor can accidentally reintroduce the leak.
-
-### 4. Errors never leak internals
-
-Prisma's own message is `Unique constraint failed on the fields: (email)` —
-returning that confirms an address is registered. One central handler logs
-everything and returns the minimum:
-
-```jsonc
-// what the client sees
-{ "error": { "code": "CONFLICT", "message": "Resursen kunde inte skapas",
-             "requestId": "req-42" } }
-```
-
-## Security
-
-| Control | Implementation |
-|---|---|
-| **Password hashing** | Argon2id, OWASP 2024 params (19 MiB, t=2, p=1) — memory-hard, no bcrypt 72-byte truncation |
-| **Password policy** | NIST SP 800-63B — length over complexity, no composition rules, no forced rotation, NFKC-normalised |
-| **Breach checking** | HaveIBeenPwned k-anonymity — only 5 characters of a SHA-1 hash ever leave the server |
-| **Rate limiting** | Two layers in Redis: per IP (brute force) and per account (distributed attacks) |
-| **Anti-enumeration** | Attempts counted for addresses that *don't exist*, so response timing reveals nothing |
-| **Lockout** | Progressive delays first (0 → 100ms → 400ms → 1.6s), because pure lockout lets anyone lock you out of your own account |
-| **Token rotation** | Refresh token reuse revokes the entire token family — replay means it was stolen |
-| **Token storage** | SHA-256 for refresh tokens, Argon2id for passwords: *match the hash to the entropy of the input* |
-| **Input validation** | Zod on every route; `role` is never read from a request body |
-| **Log redaction** | Passwords, `Authorization` and `Cookie` headers can never reach a log line |
-
-<details>
-<summary><b>Why breach checking beats complexity rules</b> (click)</summary>
-
-<br>
-
-"Must contain uppercase, a number and a symbol" reliably produces `Password1!`
-— it *reduces* real entropy by pushing everyone into the same predictable
-pattern. NIST dropped composition rules for exactly this reason.
-
-Checking against ~1 billion known-breached passwords catches far more real
-attacks. We do it without the password ever leaving our server:
-
-```
-SHA-1("password") = 5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8
-                    └─5─┘
-send only "5BAA6"  →  HIBP returns ~800 candidate suffixes
-                   →  we match locally
-```
-
-HIBP sees a prefix matching hundreds of different passwords. It cannot tell
-which one was ours. In testing, `password` came back with **52,372,427** hits.
-
-</details>
+**Each layer may only call the one below it.** Services take plain arguments
+and never touch `request` — which is what lets the (upcoming) overdue-invoice
+job reuse the exact same business logic from a BullMQ worker, where no HTTP
+request exists.
 
 ## 📊 Status
 
@@ -166,36 +112,30 @@ which one was ours. In testing, `password` came back with **52,372,427** hits.
 | Docker: PostgreSQL 16 + Redis 7, health-checked | ✅ |
 | Fastify app, fail-fast env validation, graceful shutdown | ✅ |
 | Prisma schema — users, clients, invoices, immutable ledger, audit log | ✅ |
-| Liveness + readiness endpoints | ✅ |
-| Typed domain errors + central error handler | ✅ |
-| Input validation + breach checking | ✅ |
-| Two-layer rate limiting (per IP + per account) | ✅ |
-| Argon2id hashing with constant-time verification | ✅ |
-| Login / refresh / logout, token rotation + theft detection | ✅ |
-| `authenticate` / `authorize` middleware, Redis denylist | ✅ |
-| Audit logging | ✅ |
+| Input validation, breach checking, two-layer rate limiting | ✅ |
+| Argon2id hashing, login / refresh / logout with token rotation + theft detection | ✅ |
+| `authenticate` / `authorize` middleware, Redis denylist, audit logging | ✅ |
 | Admin seed + atomic client provisioning | ✅ |
 | Client CRUD with ownership (IDOR) checks | ✅ |
 | VAT per line item, mixed rates, exact öre arithmetic | ✅ |
 | Invoice numbering — unbroken series, concurrency-safe | ✅ |
 | Invoice creation, reads, send, immutable ledger | ✅ |
 | CI: typecheck, migrations, full suite on every push | ✅ |
-| Set-password invite email | 🔨 week 3 |
-| Stripe payments, background jobs, late fees | ⏳ next |
-| React frontend, PDF invoices | ⏳ planned |
+| Set-password invite email, single-use expiring tokens | ✅ |
+| Stripe Checkout + webhook, three layers of idempotency | ✅ |
+| Statutory late fees (räntelagen), daily accrual | ✅ |
+| BullMQ workers + cron scheduler, retries and backoff | ✅ |
+| React frontend, PDF invoices | ⏳ next |
 
-**223 tests / 466 assertions** pass across 11 suites, zero failures, and run in
-CI against a real PostgreSQL and Redis on every push.
+**312 tests / 657 assertions** pass across 17 suites, zero failures, in CI
+against a real PostgreSQL and Redis on every push — including a measured
+timing-attack defence, a forced transaction rollback leaving neither row, a
+refresh-token replay triggering family-wide revocation, and 50 concurrent
+invoice numbers forming an unbroken series.
 
 ```bash
 cd backend && bun test
 ```
-
-Highlights: a measured timing-attack defence (10.2 ms vs 10.3 ms), live
-HaveIBeenPwned calls, a forced transaction rollback leaving neither row, a
-refresh-token replay triggering family-wide revocation, 50 concurrent invoice
-numbers forming an unbroken series, and a credit note cancelling its original
-to exactly zero.
 
 ## Quick start
 
@@ -214,20 +154,91 @@ bunx prisma migrate deploy
 bun run dev                       # http://localhost:3000
 ```
 
-Verify it came up:
-
 ```bash
 curl localhost:3000/health/ready
 # {"status":"ready","database":"up","redis":"up"}
 ```
 
-| Script | Does |
-|---|---|
-| `bun run dev` | Dev server with watch mode |
-| `bun run start` | Run once |
-| `bun run typecheck` | `tsc --noEmit` |
+<details>
+<summary><b>The reasoning behind the code</b> — four principles it actually follows (click)</summary>
 
-## Tech stack
+### 1. Money is never a float
+
+Every amount is an integer count of *öre* (1 SEK = 100 öre), named so the unit
+is unmistakable: `amountOre`, `unitPriceOre`, `lateFeeOre`. Conversion happens
+only at the display edge, never in business logic.
+
+```ts
+amount: 9999   // 99.99 SEK, exact, always — never 99.99 as a float
+```
+
+### 2. Financial history is append-only
+
+`Transaction` and `AuditLog` rows are never updated or deleted. A correction
+is a **new** row with a negative amount — if a row can be edited, history is
+not evidence.
+
+```ts
+await prisma.transaction.create({
+  type: 'ADJUSTMENT',
+  amountOre: -500,
+  description: 'Rättelse för faktura #123'
+})
+```
+
+### 3. Every auth failure looks identical
+
+Wrong password, unknown email, and locked account return the same status, the
+same message, and take the same amount of time — enforced *structurally*, so
+no future refactor can accidentally reintroduce the leak.
+
+### 4. Errors never leak internals
+
+Prisma's own message is `Unique constraint failed on the fields: (email)` —
+returning that confirms an address is registered. One central handler logs
+everything and returns the minimum:
+
+```jsonc
+{ "error": { "code": "CONFLICT", "message": "Resursen kunde inte skapas", "requestId": "req-42" } }
+```
+
+</details>
+
+<details>
+<summary><b>Security controls</b> (click)</summary>
+
+| Control | Implementation |
+|---|---|
+| **Password hashing** | Argon2id, OWASP 2024 params (19 MiB, t=2, p=1) — memory-hard, no bcrypt 72-byte truncation |
+| **Password policy** | NIST SP 800-63B — length over complexity, no composition rules, no forced rotation, NFKC-normalised |
+| **Breach checking** | HaveIBeenPwned k-anonymity — only 5 characters of a SHA-1 hash ever leave the server |
+| **Rate limiting** | Two layers in Redis: per IP (brute force) and per account (distributed attacks) |
+| **Anti-enumeration** | Attempts counted for addresses that *don't exist*, so response timing reveals nothing |
+| **Lockout** | Progressive delays first (0 → 100ms → 400ms → 1.6s), because pure lockout lets anyone lock you out of your own account |
+| **Token rotation** | Refresh token reuse revokes the entire token family — replay means it was stolen |
+| **Token storage** | SHA-256 for refresh tokens, Argon2id for passwords: *match the hash to the entropy of the input* |
+| **Input validation** | Zod on every route; `role` is never read from a request body |
+| **Log redaction** | Passwords, `Authorization` and `Cookie` headers can never reach a log line |
+
+**Why breach checking beats complexity rules:** "must contain uppercase, a
+number and a symbol" reliably produces `Password1!` — it *reduces* real
+entropy by pushing everyone into the same predictable pattern. Checking
+against ~1 billion known-breached passwords catches far more real attacks,
+without the password ever leaving the server:
+
+```
+SHA-1("password") = 5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8
+                    └─5─┘
+send only "5BAA6"  →  HIBP returns ~800 candidate suffixes  →  match locally
+```
+
+HIBP sees a prefix matching hundreds of passwords — it cannot tell which one
+was ours. In testing, `password` came back with **52,372,427** hits.
+
+</details>
+
+<details>
+<summary><b>Tech stack & repository layout</b> (click)</summary>
 
 | Layer | Choice | Why not the alternative |
 |---|---|---|
@@ -244,8 +255,6 @@ curl localhost:3000/health/ready
 
 Full reasoning for each: [`docs/architecture-decisions.md`](docs/architecture-decisions.md)
 
-## Repository layout
-
 ```
 backend/
 ├── prisma/              schema + migrations
@@ -259,6 +268,14 @@ backend/
 docs/
 └── architecture-decisions.md
 ```
+
+| Script | Does |
+|---|---|
+| `bun run dev` | Dev server with watch mode |
+| `bun run start` | Run once |
+| `bun run typecheck` | `tsc --noEmit` |
+
+</details>
 
 ---
 

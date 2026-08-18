@@ -28,11 +28,21 @@ export const AuditAction = {
   TOKEN_REFRESHED: 'TOKEN_REFRESHED',
   TOKEN_THEFT_DETECTED: 'TOKEN_THEFT_DETECTED',
   PASSWORD_REHASHED: 'PASSWORD_REHASHED',
+  /** An invited user set their first password. */
+  PASSWORD_SET: 'PASSWORD_SET',
+  /** An existing user changed their password via a reset link. */
+  PASSWORD_RESET: 'PASSWORD_RESET',
+  INVITE_SENT: 'INVITE_SENT',
   CLIENT_CREATED: 'CLIENT_CREATED',
   CLIENT_UPDATED: 'CLIENT_UPDATED',
   INVOICE_CREATED: 'INVOICE_CREATED',
   INVOICE_SENT: 'INVOICE_SENT',
-  INVOICE_DELETED: 'INVOICE_DELETED'
+  INVOICE_DELETED: 'INVOICE_DELETED',
+  PAYMENT_LINK_CREATED: 'PAYMENT_LINK_CREATED',
+  /** No acting user — Stripe told us, not a person. */
+  PAYMENT_RECEIVED: 'PAYMENT_RECEIVED',
+  /** No acting user — the scheduler, not a person. */
+  INVOICE_OVERDUE: 'INVOICE_OVERDUE'
 } as const
 
 export type AuditActionType = (typeof AuditAction)[keyof typeof AuditAction]

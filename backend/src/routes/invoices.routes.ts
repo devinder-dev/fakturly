@@ -56,6 +56,18 @@ export default async function invoiceRoutes(app: FastifyInstance) {
    * numbered series required by law, and its absence would be a hole someone
    * has to account for. Corrections are credit notes.
    */
+  /**
+   * POST /invoices/:id/payment-link — a hosted Stripe page for this invoice.
+   *
+   * Admin only. The client receives the URL by email rather than calling this
+   * themselves, so nothing about the amount is under their control.
+   */
+  app.post(
+    '/invoices/:id/payment-link',
+    { onRequest: [authenticate, authorize('ADMIN')] },
+    invoicesController.createPaymentLink
+  )
+
   app.delete(
     '/invoices/:id',
     { onRequest: [authenticate, authorize('ADMIN')] },

@@ -19,17 +19,19 @@ datasource db {
 // ─────────────────────────────────────────────────────────────
 
 model User {
-  id            String         @id @default(cuid())
-  email         String         @unique
-  password      String // Argon2id-hash — aldrig lösenord i klartext
-  role          Role           @default(CLIENT)
-  failedLogins  Int            @default(0) // räknar misslyckade inloggningar
-  lockedUntil   DateTime? // konto låst till denna tidpunkt
-  client        Client?
-  auditLogs     AuditLog[]
-  refreshTokens RefreshToken[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  id             String          @id @default(cuid())
+  email          String          @unique
+  password       String // Argon2id-hash — aldrig lösenord i klartext
+  role           Role            @default(CLIENT)
+  failedLogins   Int             @default(0) // räknar misslyckade inloggningar
+  lockedUntil    DateTime? // konto låst till denna tidpunkt
+  client         Client?
+  auditLogs      AuditLog[]
+  refreshTokens  RefreshToken[]
+  passwordTokens PasswordToken[]
+  emailLogs      EmailLog[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 }
 
 enum Role {
@@ -178,12 +180,36 @@ enum TransactionType {
 // E-postloggar
 // ─────────────────────────────────────────────────────────────
 
+// Record of every email we sent.
+//
+// invoiceId and userId are both optional because not every email belongs to an
+// invoice: an invite or a password reset is about a person, not a document.
+// The original model required invoiceId, which made those impossible to log.
 model EmailLog {
-  id        String    @id @default(cuid())
-  invoiceId String
-  invoice   Invoice   @relation(fields: [invoiceId], references: [id])
-  type      EmailType
-  sentAt    DateTime  @default(now())
+  id String @id @default(cuid())
+
+  invoiceId String?
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id])
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  /// Where it was sent. Kept because a client's address can change later, and
+  /// "which address did we actually send to" is the question that gets asked.
+  recipient String
+
+  type EmailType
+
+  /// The provider's message id, when it accepted the send. Null means the
+  /// attempt failed — the row is still written, because a reminder we failed
+  /// to send is exactly what you need to know about.
+  providerMessageId String?
+
+  sentAt DateTime @default(now())
+
+  @@index([invoiceId])
+  @@index([userId])
+  @@index([type, sentAt])
 }
 
 enum EmailType {
@@ -191,6 +217,84 @@ enum EmailType {
   REMINDER
   OVERDUE_NOTICE
   PAYMENT_CONFIRMED
+  INVITE
+  PASSWORD_RESET
+}
+
+// ─────────────────────────────────────────────────────────────
+// One-time tokens for setting a password
+// ─────────────────────────────────────────────────────────────
+
+/// Why an invite and a reset share one table: the mechanics are identical —
+/// a single-use, expiring, hashed token that lets someone set a password
+/// without knowing the old one. Two tables would mean two places to get the
+/// expiry, the single-use check, or the hashing wrong.
+enum PasswordTokenType {
+  /// Sent when an admin provisions a client. Longer-lived — the recipient was
+  /// not expecting it and may not read email for days.
+  INVITE
+  /// Requested by the user. Short-lived, because they are waiting for it.
+  RESET
+}
+
+// ─────────────────────────────────────────────────────────────
+// Webhook delivery log — idempotency at the EVENT level
+// ─────────────────────────────────────────────────────────────
+
+/// Stripe guarantees *at least once* delivery, not exactly once. The same
+/// event will arrive twice if our response is slow, if we return a 5xx, or if
+/// a network hiccup loses the acknowledgement — and Stripe retries for days.
+///
+/// Without this table, one payment webhook delivered twice marks the invoice
+/// paid twice and writes two PAYMENT_RECEIVED rows. The ledger then says the
+/// customer paid double.
+///
+/// Stripe's own event id is the primary key, so recording a delivery is a
+/// plain INSERT: if it conflicts, we have already handled this event and can
+/// stop. That check is atomic, which a SELECT-then-INSERT would not be.
+///
+/// Note this is a DIFFERENT concern from Invoice.idempotencyKey, which guards
+/// the payment. This guards the delivery. Both are needed: the same payment
+/// can arrive as two different events, and the same event can be delivered
+/// twice.
+model ProcessedWebhookEvent {
+  /// The provider's event id, e.g. "evt_1abc...". Not a cuid — it is theirs.
+  id String @id
+
+  /// Which provider, so a second one later cannot collide on id format.
+  provider String @default("stripe")
+
+  /// e.g. "checkout.session.completed". Kept for debugging and metrics.
+  type String
+
+  processedAt DateTime @default(now())
+
+  @@index([processedAt])
+}
+
+model PasswordToken {
+  id String @id @default(cuid())
+
+  /// SHA-256 of the token, never the token itself — same reasoning as
+  /// RefreshToken. It is 256 random bits, so a slow hash buys nothing, and
+  /// the lookup must be deterministic.
+  tokenHash String @unique
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  type      PasswordTokenType
+  expiresAt DateTime
+
+  /// Set when redeemed. The row is kept rather than deleted: a token being
+  /// presented twice is worth seeing, and a deleted row would look identical
+  /// to one that never existed.
+  usedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ import redisPlugin from './plugins/redis.ts'
 import authRoutes from './routes/auth.routes.ts'
 import clientRoutes from './routes/clients.routes.ts'
 import invoiceRoutes from './routes/invoices.routes.ts'
+import webhookRoutes from './routes/webhooks.routes.ts'
 
 // buildApp creates a fresh app every time it is called.
 // Tests want a clean app each run — hence a function, not a module-level app.
@@ -108,6 +109,12 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   // Invoices.
   await app.register(invoiceRoutes)
+
+  // Webhooks. Registered LAST and inside its own scope, because it overrides
+  // the JSON body parser to keep the raw bytes for signature verification.
+  // Fastify scopes a content-type parser to the plugin that registered it, so
+  // this cannot affect any route above.
+  await app.register(webhookRoutes)
 
   return app
 }
