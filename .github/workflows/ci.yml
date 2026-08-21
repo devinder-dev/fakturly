@@ -109,6 +109,30 @@ jobs:
           SKIP_NETWORK_TESTS: '1'
         run: bun test
 
+  frontend:
+    name: Frontend typecheck and build
+    runs-on: ubuntu-latest
+    # No services: the frontend never talks to a database. It is a bundle of
+    # static files, and the only questions worth asking in CI are "do the
+    # types hold" and "does it build".
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck and build
+        working-directory: frontend
+        # `build` runs tsc --noEmit first, then vite build. A type error and a
+        # broken bundle both fail here rather than at deploy.
+        run: bun run build
+
   # Separate job so a failure here reads as "secret committed" rather than
   # being buried among test output.
   secrets:

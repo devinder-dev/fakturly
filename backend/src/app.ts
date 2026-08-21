@@ -6,6 +6,7 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import cookie from '@fastify/cookie'
 import { isProduction, isTest } from './lib/env.ts'
+import corsPlugin from './plugins/cors.ts'
 import errorHandlerPlugin from './plugins/errorHandler.ts'
 import prismaPlugin from './plugins/prisma.ts'
 import rateLimitPlugin from './plugins/rateLimit.ts'
@@ -59,6 +60,11 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Error handler FIRST. Registered after the routes, Fastify would use its
   // own default handler for anything thrown before this point.
   await app.register(errorHandlerPlugin)
+
+  // CORS before the routes, so a rejected origin is refused before any
+  // handler runs. Note this protects browsers, not the API — curl and
+  // server-to-server calls never ask permission.
+  await app.register(corsPlugin)
 
   // Then infrastructure — routes need the database and Redis.
   await app.register(prismaPlugin)

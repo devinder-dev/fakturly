@@ -42,7 +42,15 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanupUsers(userIds)
-  await prisma.invoiceNumberSeries.deleteMany({ where: { year: new Date().getFullYear() } })
+  // NOTE: the invoice-number counter is deliberately NOT reset here.
+  //
+  // It is monotonic by design — rewinding it while invoices bearing those
+  // numbers still exist re-creates exactly the collision the unbroken-series
+  // requirement exists to prevent. That is not hypothetical: resetting it
+  // here broke 20 tests the moment a manually-created invoice survived in
+  // the dev database.
+  //
+  // Letting it advance costs nothing. The series is allowed to have gaps.
   await clearRateLimits()
 })
 

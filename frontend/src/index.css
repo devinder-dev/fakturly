@@ -1,0 +1,28 @@
+/* index.css — Tailwind and the few design tokens the app uses.
+ *
+ * Tailwind v4 configures itself in CSS rather than a JS config file. @theme
+ * defines custom values that become utility classes automatically.
+ */
+
+@import 'tailwindcss';
+
+@theme {
+  /* One accent colour, used for primary actions and nothing else. Having a
+   * single deliberate colour is what stops an app looking like a component
+   * library sampler. */
+  --color-brand-50: oklch(0.97 0.02 250);
+  --color-brand-100: oklch(0.93 0.04 250);
+  --color-brand-500: oklch(0.55 0.18 250);
+  --color-brand-600: oklch(0.48 0.18 250);
+  --color-brand-700: oklch(0.41 0.16 250);
+}
+
+/* Tabular figures for money.
+ *
+ * Without this, proportional digits make a column of amounts ragged — 1 is
+ * narrower than 8, so the decimal points do not line up and the column is
+ * genuinely harder to scan. This is the one typographic detail that matters
+ * most in an invoicing app. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
