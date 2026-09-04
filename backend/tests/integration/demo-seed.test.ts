@@ -60,12 +60,14 @@ describe.skipIf(!allowed)('resetDemoData', () => {
 
   test('🔑 every sent invoice has a ledger row; drafts have none', async () => {
     const invoices = await prisma.invoice.findMany({
-      select: { status: true, transactions: { select: { type: true } } }
+      select: { status: true, type: true, transactions: { select: { type: true } } }
     })
 
     for (const invoice of invoices) {
       const types = invoice.transactions.map((t) => t.type)
-      if (invoice.status === 'DRAFT') {
+      // A credit note carries no ledger rows of its own: the rows that
+      // cancel the debt sit on the invoice it credits (ADR 40).
+      if (invoice.status === 'DRAFT' || invoice.type === 'CREDIT_NOTE') {
         expect(types).toHaveLength(0)
       } else {
         expect(types).toContain('INVOICE_CREATED')
@@ -100,6 +102,18 @@ describe.skipIf(!allowed)('resetDemoData', () => {
         .filter((t) => t.type === 'PAYMENT_RECEIVED')
         .reduce((total, row) => total + row.amountOre, 0)
       expect(received).toBe(invoice.grossTotalOre + invoice.lateFeeOre)
+    }
+  })
+
+  test('a credited invoice balances to zero and links to its credit note', async () => {
+    const credited = await prisma.invoice.findMany({
+      where: { status: 'CREDITED' },
+      select: { transactions: true, creditNotes: { select: { type: true } } }
+    })
+    expect(credited.length).toBeGreaterThan(0)
+    for (const invoice of credited) {
+      expect(invoice.transactions.reduce((sum, row) => sum + row.amountOre, 0)).toBe(0)
+      expect(invoice.creditNotes[0]?.type).toBe('CREDIT_NOTE')
     }
   })
 

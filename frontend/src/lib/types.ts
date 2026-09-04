@@ -30,7 +30,30 @@ export type Client = {
   createdAt: string
 }
 
-export type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE'
+export type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CREDITED'
+export type InvoiceType = 'INVOICE' | 'CREDIT_NOTE'
+
+export type LedgerType =
+  | 'INVOICE_CREATED'
+  | 'PAYMENT_RECEIVED'
+  | 'LATE_FEE_ADDED'
+  | 'REMINDER_FEE_ADDED'
+  | 'CREDIT_NOTE_ISSUED'
+  | 'LATE_FEE_WAIVED'
+  | 'REMINDER_FEE_WAIVED'
+  | 'REFUND'
+  | 'ADJUSTMENT'
+
+/** One row of the immutable ledger. Never edited, never deleted. */
+export type LedgerRow = {
+  id: string
+  type: LedgerType
+  amountOre: number
+  description: string
+  createdAt: string
+}
+
+export type InvoiceReference = { id: string; invoiceNumber: string }
 
 export type InvoiceItem = {
   id: string
@@ -50,7 +73,13 @@ export type Invoice = {
   invoiceNumber: string
   clientId: string
   status: InvoiceStatus
+  type: InvoiceType
   currency: string
+
+  /** Set on a credit note: the invoice it cancels. */
+  creditsInvoice: InvoiceReference | null
+  /** Set on a credited invoice: the credit note(s) that cancelled it. */
+  creditNotes: InvoiceReference[]
 
   /**
    * Amounts arrive as integer öre — the exact value — with formatted strings
@@ -64,19 +93,25 @@ export type Invoice = {
   vatTotalOre: number
   grossTotalOre: number
   lateFeeOre: number
+  reminderFeeOre: number
+  /** gross + interest + reminder fee. Computed by the API, once. */
+  totalDueOre: number
 
   formatted: {
     netTotal: string
     vatTotal: string
     grossTotal: string
+    totalDue: string
   }
 
   issueDate: string
   dueDate: string
   sentAt: string | null
   paidAt: string | null
+  reminderSentAt: string | null
   createdAt: string
 
+  ledger: LedgerRow[]
   items: InvoiceItem[]
 }
 
@@ -139,4 +174,57 @@ export type DemoAccount = {
 export type DemoResponse = {
   accounts: DemoAccount[]
   resetsNightly: boolean
+}
+
+// ─────────────────────────────────────────────────────────────
+// Audit log
+// ─────────────────────────────────────────────────────────────
+
+export type AuditEntry = {
+  id: string
+  action: string
+  resource: string
+  resourceId: string | null
+  actorEmail: string | null
+  email: string | null
+  ipAddress: string | null
+  userAgent: string | null
+  createdAt: string
+}
+
+export type AuditLogResponse = {
+  entries: AuditEntry[]
+  pagination: { total: number; limit: number; offset: number }
+  actions: string[]
+}
+
+// ─────────────────────────────────────────────────────────────
+// Reports
+// ─────────────────────────────────────────────────────────────
+
+export type AgingBucketKey = 'current' | 'days1to30' | 'days31to60' | 'days61to90' | 'over90'
+
+export type AgingRow = Record<AgingBucketKey, number> & {
+  totalOre: number
+  clientId: string
+  clientName: string
+  invoiceCount: number
+  oldestDueDate: string
+}
+
+export type AgingReport = {
+  asOf: string
+  rows: AgingRow[]
+  totals: Record<AgingBucketKey, number> & { totalOre: number }
+  buckets: Array<{ key: AgingBucketKey; label: string }>
+  formatted: { total: string }
+}
+
+export type VatReport = {
+  from: string
+  to: string
+  documentCount: number
+  rows: Array<{ vatRate: number; netOre: number; vatOre: number; lineCount: number }>
+  totals: { netOre: number; vatOre: number }
+  formatted: { net: string; vat: string }
 }

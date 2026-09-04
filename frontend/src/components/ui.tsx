@@ -5,7 +5,7 @@
 // a directory of one-export files would be filing, not structure.
 
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from 'react'
-import type { InvoiceStatus } from '../lib/types.ts'
+import type { Invoice, InvoiceStatus, LedgerType } from '../lib/types.ts'
 
 // ─────────────────────────────────────────────────────────────
 
@@ -126,15 +126,21 @@ export function PageHeader({ title, action }: { title: string; action?: ReactNod
  * Colour AND text, never colour alone. A red dot means nothing to a
  * colour-blind reader, and roughly 8% of men are.
  */
-export function StatusBadge({ status }: { status: InvoiceStatus }) {
+export function StatusBadge({ status, type = 'INVOICE' }: { status: InvoiceStatus; type?: Invoice['type'] }) {
   const styles: Record<InvoiceStatus, { label: string; className: string }> = {
     DRAFT: { label: 'Utkast', className: 'bg-slate-100 text-slate-700' },
     SENT: { label: 'Skickad', className: 'bg-blue-100 text-blue-800' },
     PAID: { label: 'Betald', className: 'bg-green-100 text-green-800' },
-    OVERDUE: { label: 'Förfallen', className: 'bg-red-100 text-red-800' }
+    OVERDUE: { label: 'Förfallen', className: 'bg-red-100 text-red-800' },
+    CREDITED: { label: 'Krediterad', className: 'bg-amber-100 text-amber-900' }
   }
 
-  const { label, className } = styles[status]
+  // A credit note is "sent" in the database but that word means nothing to
+  // a reader; the document kind is what matters.
+  const { label, className } =
+    type === 'CREDIT_NOTE'
+      ? { label: 'Kreditfaktura', className: 'bg-violet-100 text-violet-900' }
+      : styles[status]
 
   return (
     <span
@@ -207,4 +213,44 @@ export function formatOre(ore: number, currency = 'SEK'): string {
 
 export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('sv-SE')
+}
+
+// ─────────────────────────────────────────────────────────────
+
+/** Human labels for the ledger. The type is the truth; the label is for reading. */
+export const LEDGER_LABELS: Record<LedgerType, string> = {
+  INVOICE_CREATED: 'Faktura utfärdad',
+  PAYMENT_RECEIVED: 'Betalning mottagen',
+  LATE_FEE_ADDED: 'Dröjsmålsränta',
+  REMINDER_FEE_ADDED: 'Påminnelseavgift',
+  CREDIT_NOTE_ISSUED: 'Krediterad',
+  LATE_FEE_WAIVED: 'Ränta avskriven',
+  REMINDER_FEE_WAIVED: 'Avgift avskriven',
+  REFUND: 'Återbetalning',
+  ADJUSTMENT: 'Justering'
+}
+
+/**
+ * Downloads a file the API produced, with the access token attached.
+ *
+ * Same reason as the PDF: a plain link sends no Authorization header. The
+ * filename comes from the caller, not from the response — reading
+ * Content-Disposition across CORS needs an exposed header, and the caller
+ * already knows what it asked for.
+ */
+export async function downloadFromApi(
+  fetchBlob: (path: string) => Promise<Blob>,
+  path: string,
+  filename: string
+): Promise<void> {
+  const blob = await fetchBlob(path)
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  // Revoke after the click has been handled, or Safari downloads nothing.
+  setTimeout(() => URL.revokeObjectURL(url), 1_000)
 }

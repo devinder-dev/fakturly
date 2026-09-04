@@ -29,7 +29,7 @@
 // that is a sum of stored integers.
 
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
-import { formatOre } from '../lib/money.ts'
+import { formatOre, totalDueOre } from '../lib/money.ts'
 import type { InvoiceRecord } from '../repositories/invoice.repository.ts'
 import type { ClientRecord } from '../repositories/client.repository.ts'
 
@@ -196,23 +196,41 @@ export function InvoiceDocument({
   reminderFeeOre
 }: InvoiceDocumentProps) {
   const currency = invoice.currency
-  const totalDueOre = invoice.grossTotalOre + invoice.lateFeeOre
+  const due = totalDueOre(invoice)
   const isPaid = invoice.status === 'PAID'
+  const isCreditNote = invoice.type === 'CREDIT_NOTE'
+  const isCredited = invoice.status === 'CREDITED'
+  // A credit note asks for no payment; a credited invoice no longer does.
+  const showPayment = !isPaid && !isCreditNote && !isCredited
+  const kind = isCreditNote ? 'Kreditfaktura' : 'Faktura'
 
   return (
     <Document
-      title={`Faktura ${invoice.invoiceNumber}`}
+      title={`${kind} ${invoice.invoiceNumber}`}
       author={seller.name}
-      subject={`Faktura ${invoice.invoiceNumber} till ${client.name}`}
+      subject={`${kind} ${invoice.invoiceNumber} till ${client.name}`}
     >
       <Page size="A4" style={styles.page}>
         {/* ── Header ─────────────────────────────────────────── */}
         <View style={styles.header}>
           <View>
-            <Text style={styles.title}>FAKTURA</Text>
+            <Text style={styles.title}>{kind.toUpperCase()}</Text>
             <Text style={{ color: '#64748b', marginTop: 2 }}>{seller.name}</Text>
             {isPaid && invoice.paidAt && (
               <Text style={styles.status}>BETALD {date(invoice.paidAt)}</Text>
+            )}
+            {/*
+              The reference to what is being credited is required on a
+              credit note — without it the customer's bookkeeping cannot
+              match the two documents.
+            */}
+            {isCreditNote && invoice.creditsInvoice && (
+              <Text style={styles.status}>KREDITERAR FAKTURA {invoice.creditsInvoice.invoiceNumber}</Text>
+            )}
+            {isCredited && invoice.creditNotes[0] && (
+              <Text style={{ ...styles.status, color: '#b91c1c' }}>
+                KREDITERAD GENOM {invoice.creditNotes[0].invoiceNumber}
+              </Text>
             )}
           </View>
 
@@ -304,14 +322,21 @@ export function InvoiceDocument({
             </View>
           )}
 
+          {invoice.reminderFeeOre > 0 && (
+            <View style={styles.totalRow}>
+              <Text style={{ ...styles.totalLabel, color: '#b91c1c' }}>Påminnelseavgift</Text>
+              <Text style={{ color: '#b91c1c' }}>{formatOre(invoice.reminderFeeOre, currency)}</Text>
+            </View>
+          )}
+
           <View style={styles.grand}>
-            <Text>{isPaid ? 'Betalt' : 'Att betala'}</Text>
-            <Text>{formatOre(totalDueOre, currency)}</Text>
+            <Text>{isPaid ? 'Betalt' : isCreditNote ? 'Tillgodo' : isCredited ? 'Krediterat' : 'Att betala'}</Text>
+            <Text>{formatOre(isCreditNote || isCredited ? invoice.grossTotalOre : due, currency)}</Text>
           </View>
         </View>
 
         {/* ── Payment ────────────────────────────────────────── */}
-        {!isPaid && (
+        {showPayment && (
           <View style={styles.payment}>
             <View style={styles.paymentBlock}>
               <Text style={styles.paymentLabel}>Bankgiro</Text>
@@ -323,7 +348,7 @@ export function InvoiceDocument({
             </View>
             <View style={styles.paymentBlock}>
               <Text style={styles.paymentLabel}>Belopp</Text>
-              <Text style={styles.paymentValue}>{formatOre(totalDueOre, currency)}</Text>
+              <Text style={styles.paymentValue}>{formatOre(due, currency)}</Text>
             </View>
             <View style={styles.paymentBlock}>
               <Text style={styles.paymentLabel}>Senast</Text>
@@ -337,11 +362,19 @@ export function InvoiceDocument({
           applies regardless, but the 60 kr reminder fee may only be charged if
           the invoice said so in advance.
         */}
-        <Text style={styles.terms}>
-          Betalningsvillkor 30 dagar. Efter förfallodatum debiteras dröjsmålsränta enligt
-          räntelagen (referensränta + 8 procentenheter) samt lagstadgad påminnelseavgift om{' '}
-          {formatOre(reminderFeeOre, currency)}. Ange OCR-referensen vid betalning.
-        </Text>
+        {isCreditNote ? (
+          <Text style={styles.terms}>
+            Denna kreditfaktura upphäver faktura{' '}
+            {invoice.creditsInvoice?.invoiceNumber ?? ''} i sin helhet. Beloppet regleras
+            mot kommande fakturor eller återbetalas.
+          </Text>
+        ) : (
+          <Text style={styles.terms}>
+            Betalningsvillkor 30 dagar. Efter förfallodatum debiteras dröjsmålsränta enligt
+            räntelagen (referensränta + 8 procentenheter) samt lagstadgad påminnelseavgift om{' '}
+            {formatOre(reminderFeeOre, currency)}. Ange OCR-referensen vid betalning.
+          </Text>
+        )}
 
         {/* ── Footer ─────────────────────────────────────────── */}
         <View style={styles.footer} fixed>

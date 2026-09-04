@@ -28,15 +28,15 @@ export function ClientInvoicesPage() {
     queryFn: () => api.get<InvoiceListResponse>('/invoices?limit=100')
   })
 
+  // A credit note is also SENT, with a negative total; it is not something
+  // to pay. What is owed is the API's totalDueOre per open invoice.
   const unpaid =
     data?.invoices.filter(
-      (invoice) => invoice.status === 'SENT' || invoice.status === 'OVERDUE'
+      (invoice) =>
+        invoice.type === 'INVOICE' && (invoice.status === 'SENT' || invoice.status === 'OVERDUE')
     ) ?? []
 
-  const outstandingOre = unpaid.reduce(
-    (total, invoice) => total + invoice.grossTotalOre + invoice.lateFeeOre,
-    0
-  )
+  const outstandingOre = unpaid.reduce((total, invoice) => total + invoice.totalDueOre, 0)
 
   return (
     <>
@@ -90,10 +90,10 @@ export function ClientInvoicesPage() {
                         {formatDate(invoice.dueDate)}
                       </td>
                       <td className="px-6 py-4">
-                        <StatusBadge status={invoice.status} />
+                        <StatusBadge status={invoice.status} type={invoice.type} />
                       </td>
                       <td className="tabular px-6 py-4 text-right font-medium text-slate-900">
-                        {formatOre(invoice.grossTotalOre + invoice.lateFeeOre, invoice.currency)}
+                        {invoice.formatted.totalDue}
                       </td>
                     </tr>
                   ))}

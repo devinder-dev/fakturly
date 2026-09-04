@@ -92,7 +92,8 @@ export const createInvoiceSchema = z.object({
 export const invoiceListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   offset: z.coerce.number().int().min(0).default(0),
-  status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE']).optional(),
+  status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CREDITED']).optional(),
+  type: z.enum(['INVOICE', 'CREDIT_NOTE']).optional(),
   /** Admin only — a client is always scoped to their own invoices regardless. */
   clientId: z.string().min(1).max(64).optional()
 })

@@ -78,6 +78,29 @@ export default async function invoiceRoutes(app: FastifyInstance) {
     invoicesController.createPaymentLink
   )
 
+  /**
+   * POST /invoices/:id/credit-note — cancels a sent invoice with a new
+   * document. There is no DELETE for a sent invoice and there is no PATCH of
+   * its amounts; this is the only way to correct one, because it is the
+   * only way the law allows.
+   */
+  app.post(
+    '/invoices/:id/credit-note',
+    { onRequest: [authenticate, authorize('ADMIN')] },
+    invoicesController.createCreditNote
+  )
+
+  /**
+   * POST /invoices/:id/reminder — emails the customer and, the first time,
+   * charges the statutory 60 kr fee. Idempotent on the fee, not on the email:
+   * pressing it twice sends two reminders and charges once.
+   */
+  app.post(
+    '/invoices/:id/reminder',
+    { onRequest: [authenticate, authorize('ADMIN')] },
+    invoicesController.sendReminder
+  )
+
   app.delete(
     '/invoices/:id',
     { onRequest: [authenticate, authorize('ADMIN')] },

@@ -9,6 +9,8 @@ import { LoginPage } from './pages/LoginPage.tsx'
 import { SetPasswordPage } from './pages/SetPasswordPage.tsx'
 import { DashboardPage } from './pages/admin/DashboardPage.tsx'
 import { ClientsPage } from './pages/admin/ClientsPage.tsx'
+import { ReportsPage } from './pages/admin/ReportsPage.tsx'
+import { AuditLogPage } from './pages/admin/AuditLogPage.tsx'
 import { AdminInvoicesPage } from './pages/admin/AdminInvoicesPage.tsx'
 import { NewInvoicePage } from './pages/admin/NewInvoicePage.tsx'
 import { InvoiceDetailPage } from './pages/InvoiceDetailPage.tsx'
@@ -62,6 +64,22 @@ export function App() {
           element={
             <RequireAuth role="ADMIN">
               <ClientsPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/reports"
+          element={
+            <RequireAuth role="ADMIN">
+              <ReportsPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/audit"
+          element={
+            <RequireAuth role="ADMIN">
+              <AuditLogPage />
             </RequireAuth>
           }
         />

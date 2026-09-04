@@ -62,6 +62,6 @@ export async function renderInvoicePdf(invoice: InvoiceRecord): Promise<Rendered
 
   return {
     bytes,
-    filename: `faktura-${invoice.invoiceNumber}.pdf`
+    filename: `${invoice.type === 'CREDIT_NOTE' ? 'kreditfaktura' : 'faktura'}-${invoice.invoiceNumber}.pdf`
   }
 }

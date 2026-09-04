@@ -1,4 +1,4 @@
-// auditLog.repository.ts — writes to the audit log. Only ever inserts.
+// auditLog.repository.ts — the audit log. Inserts and reads; never anything else.
 //
 // There is no update and no delete in this file, and there never will be.
 // An audit log that can be edited is not evidence. Swedish bookkeeping law
@@ -44,4 +44,87 @@ export async function createAuditEntry(entry: AuditEntry): Promise<void> {
       userAgent: entry.userAgent ?? null
     }
   })
+}
+
+// ─────────────────────────────────────────────────────────────
+// Reading
+// ─────────────────────────────────────────────────────────────
+
+export type AuditLogRow = {
+  id: string
+  action: string
+  resource: string
+  resourceId: string | null
+  /** The acting user's email, looked up now — the row stores only the id. */
+  actorEmail: string | null
+  /** The email that was attempted, for events with no user (failed logins). */
+  email: string | null
+  ipAddress: string | null
+  userAgent: string | null
+  createdAt: Date
+}
+
+export type AuditLogFilter = {
+  limit: number
+  offset: number
+  action?: string | undefined
+  resourceId?: string | undefined
+  userId?: string | undefined
+}
+
+export type AuditLogPage = {
+  entries: AuditLogRow[]
+  total: number
+}
+
+/**
+ * A page of the log, newest first.
+ *
+ * Every filter maps onto an index the schema already has: [action,
+ * createdAt], [userId, createdAt]. resourceId is not indexed — "everything
+ * that happened to this invoice" is a rare, human-driven query and the table
+ * is scanned for it. Worth an index the day it is not rare.
+ */
+export async function findAuditEntries(filter: AuditLogFilter): Promise<AuditLogPage> {
+  const where = {
+    ...(filter.action ? { action: filter.action } : {}),
+    ...(filter.resourceId ? { resourceId: filter.resourceId } : {}),
+    ...(filter.userId ? { userId: filter.userId } : {})
+  }
+
+  const [rows, total] = await prisma.$transaction([
+    prisma.auditLog.findMany({
+      where,
+      select: {
+        id: true,
+        action: true,
+        resource: true,
+        resourceId: true,
+        email: true,
+        ipAddress: true,
+        userAgent: true,
+        createdAt: true,
+        user: { select: { email: true } }
+      },
+      orderBy: { createdAt: 'desc' },
+      take: filter.limit,
+      skip: filter.offset
+    }),
+    prisma.auditLog.count({ where })
+  ])
+
+  return {
+    entries: rows.map((row) => ({
+      id: row.id,
+      action: row.action,
+      resource: row.resource,
+      resourceId: row.resourceId,
+      actorEmail: row.user?.email ?? null,
+      email: row.email,
+      ipAddress: row.ipAddress,
+      userAgent: row.userAgent,
+      createdAt: row.createdAt
+    })),
+    total
+  }
 }

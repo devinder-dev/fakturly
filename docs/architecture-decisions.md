@@ -689,6 +689,111 @@ but wrong. `AuthProvider` exposes `hasLoggedOut`; the guard consults it.
 
 ---
 
+## 40. A sent invoice is corrected by a credit note, never edited
+
+**Context:** an invoice went out with the wrong amount. Every CRUD tutorial
+answers with an edit form; bokföringslagen does not allow it.
+
+**Decision:** `POST /invoices/:id/credit-note` creates a NEW document — type
+`CREDIT_NOTE`, the next number in the SAME series, every line mirrored with a
+negated quantity — and moves the original to `CREDITED`. Five writes in one
+transaction: the status change (guarded by expected status in the WHERE
+clause), the new document, a `CREDIT_NOTE_ISSUED` row for minus the gross,
+and a write-off row for any interest and any reminder fee.
+
+**Where the ledger rows go — on the original, not the credit note.** The
+ledger follows the receivable: the original's rows now sum to exactly zero,
+which is the property a customer or auditor checks. The credit note is the
+document that explains why. Rows on the credit note instead would leave the
+original's ledger claiming money that will never arrive.
+
+**Same number series**, because the law counts credit notes as invoices. A
+separate series would leave gaps in the "real" one that someone must explain.
+
+**Not allowed: crediting a PAID invoice.** That is a refund — money moving
+back to the customer, with a Stripe call and its own ledger rows. The
+transition table refuses it rather than half-doing it. Partial credit notes
+are the other natural extension; full credit came first because it has no
+ambiguity about interest and fees (everything is written off).
+
+**Consequence found by test:** a credit note is `SENT` with a due date, so the
+overdue job had to learn `type: 'INVOICE'`, or every credit note would turn
+overdue the next night and accrue negative interest.
+
+---
+
+## 41. The reminder fee is charged once, by the database
+
+**Context:** lag (1981:739) om ersättning för inkassokostnader allows one
+reminder fee of 60 kr per debt — and only if the invoice said so in advance.
+
+**Decision:** `POST /invoices/:id/reminder` charges the fee on the first call
+and merely re-sends on every later one. The "once" is `reminderFeeOre: 0` in
+the UPDATE's WHERE clause, not a check in the service. Two admins pressing the
+button at the same instant cannot both charge.
+
+**Separate column from interest** (`reminderFeeOre` beside `lateFeeOre`),
+because they are different legal things — interest compensates for time, the
+fee for the cost of chasing — and the PDF, the SIE export and the customer
+must see them apart. `totalDueOre()` in `lib/money.ts` is the one place the
+three parts are added, so no screen can forget one.
+
+**The terms are printed on every invoice** — "påminnelseavgift om 60,00 SEK" —
+precisely because the fee is only chargeable if they were.
+
+**The email goes through the queue**, after the fee is committed. A mail
+outage must not lose the fee; a retry must not charge it twice.
+
+**Also wired here:** sending an invoice now emails the customer. The function
+had existed since week 3 and nothing called it.
+
+---
+
+## 42. Reports are computed, and exported in the formats accountants use
+
+**Decision:** three admin reports, each a pure transformation of repository
+reads, each with `asOf` or a period as an argument.
+
+- **Kundreskontra (aging):** open invoices bucketed by days past due, per
+  client, amounts including interest and fees. Bucketing in the service, not
+  SQL — the set of open invoices is small and the edges are a business rule.
+- **Momsrapport:** net and VAT per rate over documents ISSUED in the period
+  (`sentAt`, `to` exclusive). `groupBy` in the database. Credit notes are
+  negative lines, so they reduce the period exactly as Skatteverket expects.
+- **SIE 4:** every ledger row becomes one balanced verification on the BAS
+  chart of accounts: invoices as 1510 against 300x/26xx per VAT rate,
+  payments 1930/1510, interest 8313, fees 3590. `buildSie` throws on a
+  verification that does not balance — better here than in the auditor's
+  import.
+
+**CSV is Swedish CSV:** semicolon separator (a comma is the decimal
+separator here), UTF-8 BOM (or åäö arrive as Ã¥Ã¤Ã¶), CRLF, and a leading
+tab before `=`, `+`, `-`, `@` so a customer-typed description cannot execute
+as a formula when opened in Excel.
+
+**SIE is CP437:** the 1990s encoding the specification names and every
+importer accepts. Only the Swedish letters need mapping; anything else
+non-ASCII becomes a visible `?` rather than a silently wrong byte.
+
+**The SIE export is audited** — a GET with no side effect on our data, but
+the moment the ledger leaves the system.
+
+---
+
+## 43. The audit log is readable, and still only ever appended
+
+**Decision:** `GET /audit-log` (admin) pages the log with filters on action,
+user and resource. The repository gains a read function beside its one
+insert. There is no route, service or repository function that updates or
+deletes an entry — the invoice page's "Händelser" panel and the log screen
+are views of rows that cannot change.
+
+**Every invoice response carries its ledger** (`ledger[]`), for both roles.
+The customer sees where the number came from; a figure with a visible
+explanation is disputed less than one that changed overnight.
+
+---
+
 ## Open decisions
 
 | Question | Status |
