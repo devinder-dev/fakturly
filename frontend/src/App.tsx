@@ -4,8 +4,10 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { RequireAuth } from './components/RequireAuth.tsx'
 import { AppLayout } from './components/AppLayout.tsx'
 import { useAuth } from './lib/auth.tsx'
+import { LandingPage } from './pages/LandingPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { SetPasswordPage } from './pages/SetPasswordPage.tsx'
+import { DashboardPage } from './pages/admin/DashboardPage.tsx'
 import { ClientsPage } from './pages/admin/ClientsPage.tsx'
 import { AdminInvoicesPage } from './pages/admin/AdminInvoicesPage.tsx'
 import { NewInvoicePage } from './pages/admin/NewInvoicePage.tsx'
@@ -15,19 +17,24 @@ import { ClientInvoicesPage } from './pages/client/ClientInvoicesPage.tsx'
 /**
  * Sends each role to its own start page.
  *
- * An admin lands on clients (their first action is usually adding one); a
- * client lands on their invoices, which is the only thing they came for.
+ * An admin lands on the dashboard; a client lands on their invoices, which
+ * is the only thing they came for.
  */
 function HomeRedirect() {
   const { user } = useAuth()
   if (!user) return <Navigate to="/login" replace />
-  return <Navigate to={user.role === 'ADMIN' ? '/clients' : '/invoices'} replace />
+  return <Navigate to={user.role === 'ADMIN' ? '/dashboard' : '/invoices'} replace />
 }
 
 export function App() {
   return (
     <Routes>
-      {/* Public */}
+      {/*
+        Public. The landing page is the root: it is what a link in a CV or
+        a search result should open, and it works whether or not you are
+        logged in. The app itself lives under its own paths.
+      */}
+      <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/set-password" element={<SetPasswordPage />} />
 
@@ -39,9 +46,17 @@ export function App() {
           </RequireAuth>
         }
       >
-        <Route path="/" element={<HomeRedirect />} />
+        <Route path="/app" element={<HomeRedirect />} />
 
         {/* Admin only */}
+        <Route
+          path="/dashboard"
+          element={
+            <RequireAuth role="ADMIN">
+              <DashboardPage />
+            </RequireAuth>
+          }
+        />
         <Route
           path="/clients"
           element={

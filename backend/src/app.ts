@@ -14,6 +14,8 @@ import redisPlugin from './plugins/redis.ts'
 import authRoutes from './routes/auth.routes.ts'
 import clientRoutes from './routes/clients.routes.ts'
 import invoiceRoutes from './routes/invoices.routes.ts'
+import dashboardRoutes from './routes/dashboard.routes.ts'
+import demoRoutes from './routes/demo.routes.ts'
 import webhookRoutes from './routes/webhooks.routes.ts'
 
 // buildApp creates a fresh app every time it is called.
@@ -115,6 +117,12 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   // Invoices.
   await app.register(invoiceRoutes)
+
+  // Admin dashboard — aggregates over the ledger.
+  await app.register(dashboardRoutes)
+
+  // Demo accounts. The plugin registers nothing unless DEMO_MODE is on.
+  await app.register(demoRoutes)
 
   // Webhooks. Registered LAST and inside its own scope, because it overrides
   // the JSON body parser to keep the raw bytes for signature verification.

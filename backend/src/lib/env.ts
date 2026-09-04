@@ -59,7 +59,40 @@ const envSchema = z.object({
    * Short, because the user requested it and is waiting for it. A reset link
    * sitting valid in an inbox for a week is a standing key to the account.
    */
-  RESET_TOKEN_HOURS: z.coerce.number().int().positive().default(2)
+  RESET_TOKEN_HOURS: z.coerce.number().int().positive().default(2),
+
+  // ── Seller details, printed on every invoice PDF ─────────────
+  //
+  // Swedish law (mervärdesskattelagen 17 kap.) lists what an invoice must
+  // state, and most of it is about the SELLER: name, address, organisation
+  // number, VAT registration number. Configuration rather than constants,
+  // because the same code serves the demo company and a real one.
+  //
+  // The defaults are a fictional company so the demo and local development
+  // produce a complete, legal-looking document without any setup.
+  COMPANY_NAME: z.string().min(1).default('Fakturly Demo AB'),
+  COMPANY_ADDRESS: z.string().min(1).default('Sveavägen 1, 111 57 Stockholm'),
+  COMPANY_ORG_NUMBER: z.string().min(1).default('559123-4567'),
+  // Swedish VAT numbers are SE + the ten organisation-number digits + 01.
+  COMPANY_VAT_NUMBER: z.string().min(1).default('SE559123456701'),
+  COMPANY_EMAIL: z.string().min(1).default('faktura@fakturly.se'),
+  COMPANY_BANKGIRO: z.string().min(1).default('123-4567'),
+
+  /**
+   * Demo mode — the public showcase deployment.
+   *
+   * When on, the API exposes the demo login credentials at GET /demo, and a
+   * nightly job wipes the database and re-seeds it. Both are things a real
+   * deployment must never do, which is why they hang off one explicit flag
+   * rather than being inferred from anything else.
+   *
+   * Reads "true" / "1" as on. Everything else — including the absent case —
+   * is off, so forgetting the variable fails safe.
+   */
+  DEMO_MODE: z
+    .string()
+    .optional()
+    .transform((value) => value === 'true' || value === '1')
 })
 
 /**

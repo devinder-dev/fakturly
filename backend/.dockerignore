@@ -1,0 +1,8 @@
+# Not needed inside the image, and some of it must never be there.
+node_modules
+.env
+.env.*
+tests
+coverage
+*.log
+.DS_Store

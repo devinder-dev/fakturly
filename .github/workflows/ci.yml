@@ -107,6 +107,10 @@ jobs:
         # not decide whether our build is green.
         env:
           SKIP_NETWORK_TESTS: '1'
+          # The demo-seed test wipes the database. Allowed here, where the
+          # database was created for this run and dies with it — never by
+          # default, where `bun test` would empty a developer's local data.
+          ALLOW_DB_WIPE: '1'
         run: bun test
 
   frontend:
@@ -132,6 +136,18 @@ jobs:
         # `build` runs tsc --noEmit first, then vite build. A type error and a
         # broken bundle both fail here rather than at deploy.
         run: bun run build
+
+  docker:
+    name: API image builds
+    runs-on: ubuntu-latest
+    # The Dockerfile is what production runs. A Dockerfile that only gets
+    # exercised on deploy day is one that breaks on deploy day.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        working-directory: backend
+        run: docker build -t fakturly-api:ci .
 
   # Separate job so a failure here reads as "secret committed" rather than
   # being buried among test output.

@@ -18,7 +18,8 @@ import {
   ErrorMessage,
   EmptyState,
   StatusBadge,
-  formatDate
+  formatDate,
+  formatOre
 } from '../../components/ui.tsx'
 
 export function ClientInvoicesPage() {
@@ -48,7 +49,7 @@ export function ClientInvoicesPage() {
         <Card className="mb-6 p-6">
           <p className="text-sm text-slate-600">Att betala</p>
           <p className="tabular mt-1 text-3xl font-semibold text-slate-900">
-            {(outstandingOre / 100).toFixed(2).replace('.', ',')} SEK
+            {formatOre(outstandingOre)}
           </p>
           <p className="mt-1 text-sm text-slate-500">
             {unpaid.length} obetald{unpaid.length === 1 ? ' faktura' : 'a fakturor'}
@@ -92,13 +93,7 @@ export function ClientInvoicesPage() {
                         <StatusBadge status={invoice.status} />
                       </td>
                       <td className="tabular px-6 py-4 text-right font-medium text-slate-900">
-                        {(
-                          (invoice.grossTotalOre + invoice.lateFeeOre) /
-                          100
-                        )
-                          .toFixed(2)
-                          .replace('.', ',')}{' '}
-                        SEK
+                        {formatOre(invoice.grossTotalOre + invoice.lateFeeOre, invoice.currency)}
                       </td>
                     </tr>
                   ))}

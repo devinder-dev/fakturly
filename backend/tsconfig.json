@@ -10,6 +10,12 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
 
+    // JSX exists in the backend for ONE reason: @react-pdf/renderer describes
+    // a PDF as a React tree (Document > Page > View > Text) and lays it out
+    // with flexbox. No DOM, no browser — React is used here purely as a
+    // declarative way to describe a document. See src/pdf/.
+    "jsx": "react-jsx",
+
     // Strikt läge — fångar buggar innan koden körs. Ingen "any".
     "strict": true,
     "noImplicitAny": true,
@@ -32,6 +38,6 @@
     "types": ["node"],
     "lib": ["ESNext"]
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules", "dist"]
 }

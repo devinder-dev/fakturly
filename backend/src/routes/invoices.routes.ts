@@ -35,6 +35,16 @@ export default async function invoiceRoutes(app: FastifyInstance) {
   app.get('/invoices/:id', { onRequest: [authenticate] }, invoicesController.getInvoice)
 
   /**
+   * GET /invoices/:id/pdf — the printable document.
+   *
+   * Both roles, same ownership rule as the JSON endpoint: the controller
+   * loads the invoice through the service, which answers 404 for anyone
+   * else's. The PDF is rendered from that loaded record, so there is no way
+   * to reach the renderer without passing the check.
+   */
+  app.get('/invoices/:id/pdf', { onRequest: [authenticate] }, invoicesController.getInvoicePdf)
+
+  /**
    * POST /invoices/:id/send — DRAFT becomes SENT.
    *
    * A POST to a sub-resource rather than a PATCH of the status field. The

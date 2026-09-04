@@ -93,3 +93,50 @@ export type InvoiceListResponse = {
   invoices: Invoice[]
   pagination: { total: number; limit: number; offset: number }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Dashboard
+// ─────────────────────────────────────────────────────────────
+
+export type MonthlyRow = {
+  /** "YYYY-MM" */
+  month: string
+  invoicedOre: number
+  receivedOre: number
+}
+
+export type Dashboard = {
+  outstanding: { amountOre: number; count: number }
+  overdue: { amountOre: number; count: number }
+  thisMonth: { invoicedOre: number; receivedOre: number }
+  /** Twelve entries, oldest first. Zero-filled by the API. */
+  months: MonthlyRow[]
+  topClients: Array<{
+    clientId: string
+    name: string
+    outstandingOre: number
+    invoiceCount: number
+  }>
+  formatted: {
+    outstanding: string
+    overdue: string
+    invoicedThisMonth: string
+    receivedThisMonth: string
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Demo mode — only answered by an API running with DEMO_MODE on
+// ─────────────────────────────────────────────────────────────
+
+export type DemoAccount = {
+  role: Role
+  email: string
+  password: string
+  label: string
+}
+
+export type DemoResponse = {
+  accounts: DemoAccount[]
+  resetsNightly: boolean
+}

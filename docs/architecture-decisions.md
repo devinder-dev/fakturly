@@ -583,6 +583,112 @@ not a convenience.
 
 ---
 
+## 36. The demo environment is disposable, and one file may delete ledger rows
+
+**Context:** a public showcase needs data a stranger can log in and break,
+and it needs to be intact again the next morning.
+
+**Decision:** `src/demo/seed.ts` wipes every table and rebuilds a dataset.
+It is the only code in the repository that deletes a `Transaction` or an
+`AuditLog` row.
+
+**Why it is safe:**
+
+1. It refuses to run in production unless `DEMO_MODE=true` is set explicitly.
+2. It deletes everything or nothing — there is no "remove this invoice" path
+   that a later feature could quietly reuse.
+3. It lives in its own folder, outside the layered architecture, so nothing
+   in `services/` or `repositories/` can import it by accident.
+4. The nightly reset worker and the `GET /demo` route are constructed only
+   when the flag is on. In a real deployment they do not exist, rather than
+   existing and refusing.
+
+**The data is produced by the real code paths.** Invoices go through
+`invoice.service`, payments through the same repository function the Stripe
+webhook uses, and overdue interest comes from running the actual nightly job
+against a past date. Only timestamps are then moved into the past. A seed that
+inserted rows directly would drift from the real rules the first time a rule
+changed.
+
+**Rejected:** a `?demo=1` flag on the frontend with hardcoded credentials.
+The API decides whether it is a demo; the frontend asks `GET /demo` and shows
+the buttons only if it answers. One source of truth, and no credentials in a
+JavaScript bundle that is not in demo mode.
+
+---
+
+## 37. The dashboard reads the ledger, not the invoices
+
+**Decision:** "invoiced this month" and "received this month" are sums over
+`Transaction` rows by date. "Outstanding" and "overdue" are sums over
+`Invoice` by status.
+
+**Why:** the two questions are different. What is owed *now* is current state,
+and the invoice table holds it. What *happened* in March is an event with a
+date, and the ledger is the record of events. Reading "received" from
+`Invoice.paidAt` gives the same answer today and a different one the day a
+payment is corrected — the ledger keeps the original row and adds an
+adjustment; `paidAt` just changes.
+
+**The one raw query:** Prisma's `groupBy` cannot truncate a timestamp to its
+month, so the monthly series is a `$queryRaw` tagged template with
+`date_trunc('month', "createdAt" AT TIME ZONE 'Europe/Stockholm')`. Tagged
+template, so the date is a bound parameter; the time zone conversion, because
+an invoice sent at 00:30 on the 1st in Stockholm is still the 31st in UTC and
+would land in the wrong month.
+
+**Nothing is stored.** A dashboard that caches its own totals is a second copy
+of the truth, and two copies drift.
+
+---
+
+## 38. PDFs are rendered on request, never stored
+
+**Decision:** `GET /invoices/:id/pdf` renders the document from the invoice
+row every time, with `@react-pdf/renderer`, behind the same ownership check as
+the JSON endpoint.
+
+**Why render, not store:** the invoice row *is* the record. A stored file is a
+second copy that can disagree with it. A sent invoice is frozen, so
+regenerating always yields the same document; a draft or an overdue invoice
+changes, and a cached file would show yesterday's amount.
+
+**Why React for a PDF:** the library describes a document as components laid
+out with flexbox. The alternative, pdfkit, is a pen: every label at an x/y
+coordinate, and a table is a page of arithmetic. For a document whose layout
+must not break when a description wraps, flexbox wins. React in the backend
+exists for this one purpose and touches no DOM.
+
+**What the document must contain** is decided by mervärdesskattelagen, not by
+taste: invoice number from the unbroken series, issue date, seller's
+organisation and VAT numbers, both parties' names and addresses, the taxable
+amount and VAT *per rate*, and the words *Godkänd för F-skatt*. The late-fee
+terms are printed because the reminder fee may only be charged if the invoice
+said so in advance.
+
+**The OCR reference** is derived from the invoice number — digits, a length
+digit, a Luhn check digit — the scheme Bankgirot uses, so a customer's bank
+rejects a mistyped reference before the money leaves. Derived on every render
+rather than stored, so it cannot disagree with itself.
+
+---
+
+## 39. The frontend forgets where you were after a deliberate logout
+
+**Context:** the route guard remembers the path an unauthenticated visitor was
+heading to, so that login can send them back. Good for an expired session or a
+deep link from an email.
+
+**Decision:** after the user presses "log out", the guard drops that memory.
+
+**Why:** the next person to log in on that browser may be someone else, and
+"return to the invoice the previous user was reading" is not a feature. It was
+found by the smoke test: logging out as the admin and in as a client landed the
+client on the admin's last invoice — harmless because the API scopes by owner,
+but wrong. `AuthProvider` exposes `hasLoggedOut`; the guard consults it.
+
+---
+
 ## Open decisions
 
 | Question | Status |

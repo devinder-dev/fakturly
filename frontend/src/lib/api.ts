@@ -158,8 +158,37 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return data as T
 }
 
+/**
+ * Fetches a binary response — used for the invoice PDF.
+ *
+ * A plain <a href="/invoices/x/pdf"> cannot work here: the access token
+ * lives in memory and a link click sends no Authorization header. So the
+ * bytes are fetched with the token, wrapped in a Blob, and handed to the
+ * browser as an object URL. The one-shot refresh on 401 is reused.
+ */
+async function requestBlob(path: string, isRetry = false): Promise<Blob> {
+  const headers: Record<string, string> = {}
+  if (accessToken) headers.authorization = `Bearer ${accessToken}`
+
+  const response = await fetch(`${API_URL}${path}`, { headers, credentials: 'include' })
+
+  if (response.status === 401 && !isRetry) {
+    const refreshed = await refreshAccessToken()
+    if (refreshed) return requestBlob(path, true)
+  }
+
+  if (!response.ok) {
+    const text = await response.text()
+    const data: unknown = text ? JSON.parse(text) : null
+    throw new ApiError(response.status, data as ApiErrorBody)
+  }
+
+  return response.blob()
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
+  getBlob: requestBlob,
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),

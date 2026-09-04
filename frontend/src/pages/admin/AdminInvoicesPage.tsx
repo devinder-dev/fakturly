@@ -1,9 +1,9 @@
 // AdminInvoicesPage.tsx — admin: every invoice.
 
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../../lib/api.ts'
-import type { InvoiceListResponse, ClientListResponse } from '../../lib/types.ts'
+import type { InvoiceListResponse, ClientListResponse, InvoiceStatus } from '../../lib/types.ts'
 import {
   Button,
   Card,
@@ -12,14 +12,43 @@ import {
   ErrorMessage,
   EmptyState,
   StatusBadge,
-  formatDate
+  formatDate,
+  formatOre
 } from '../../components/ui.tsx'
 
+const STATUSES: Array<{ value: InvoiceStatus | ''; label: string }> = [
+  { value: '', label: 'Alla' },
+  { value: 'DRAFT', label: 'Utkast' },
+  { value: 'SENT', label: 'Skickade' },
+  { value: 'OVERDUE', label: 'Förfallna' },
+  { value: 'PAID', label: 'Betalda' }
+]
+
 export function AdminInvoicesPage() {
+  /**
+   * Filters live in the URL, not in component state. A filtered list can
+   * then be linked to — the dashboard's "largest debtors" does exactly that —
+   * and survives a page refresh.
+   */
+  const [searchParams, setSearchParams] = useSearchParams()
+  const status = searchParams.get('status') ?? ''
+  const clientId = searchParams.get('clientId') ?? ''
+
+  const query = new URLSearchParams({ limit: '100' })
+  if (status) query.set('status', status)
+  if (clientId) query.set('clientId', clientId)
+
   const invoices = useQuery({
-    queryKey: ['invoices'],
-    queryFn: () => api.get<InvoiceListResponse>('/invoices?limit=100')
+    queryKey: ['invoices', { status, clientId }],
+    queryFn: () => api.get<InvoiceListResponse>(`/invoices?${query.toString()}`)
   })
+
+  function setFilter(key: 'status' | 'clientId', value: string) {
+    const next = new URLSearchParams(searchParams)
+    if (value) next.set(key, value)
+    else next.delete(key)
+    setSearchParams(next, { replace: true })
+  }
 
   // Fetched separately so the table can show client names rather than ids.
   // The invoice endpoint returns clientId only — it does not embed the
@@ -44,6 +73,38 @@ export function AdminInvoicesPage() {
         }
       />
 
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {STATUSES.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => setFilter('status', option.value)}
+            className={
+              'rounded-full px-3 py-1 text-sm transition-colors ' +
+              (status === option.value
+                ? 'bg-slate-900 text-white'
+                : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50')
+            }
+          >
+            {option.label}
+          </button>
+        ))}
+
+        <select
+          aria-label="Kund"
+          value={clientId}
+          onChange={(event) => setFilter('clientId', event.target.value)}
+          className="ml-auto rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+        >
+          <option value="">Alla kunder</option>
+          {clients.data?.clients.map((client) => (
+            <option key={client.id} value={client.id}>
+              {client.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {invoices.isLoading && <Spinner />}
       {invoices.error && <ErrorMessage error={invoices.error} />}
 
@@ -51,8 +112,12 @@ export function AdminInvoicesPage() {
         <Card>
           {invoices.data.invoices.length === 0 ? (
             <EmptyState
-              title="Inga fakturor ännu"
-              description="Skapa din första faktura för en av dina kunder."
+              title={status || clientId ? 'Inga fakturor matchar' : 'Inga fakturor ännu'}
+              description={
+                status || clientId
+                  ? 'Prova ett annat filter.'
+                  : 'Skapa din första faktura för en av dina kunder.'
+              }
             />
           ) : (
             <div className="overflow-x-auto">
@@ -94,7 +159,7 @@ export function AdminInvoicesPage() {
                             varav ränta{' '}
                             {/* Shown separately so the customer can see why the
                                 figure grew, rather than a number that changed. */}
-                            {(invoice.lateFeeOre / 100).toFixed(2).replace('.', ',')} SEK
+                            {formatOre(invoice.lateFeeOre, invoice.currency)}
                           </span>
                         )}
                       </td>

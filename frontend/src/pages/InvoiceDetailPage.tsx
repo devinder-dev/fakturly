@@ -20,8 +20,12 @@ import {
   Spinner,
   ErrorMessage,
   StatusBadge,
-  formatDate
+  formatDate,
+  formatOre
 } from '../components/ui.tsx'
+
+/** An amount without its currency, for table cells where the unit is implied. */
+const plain = (ore: number) => formatOre(ore, '').trim()
 
 export function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -39,6 +43,28 @@ export function InvoiceDetailPage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['invoice', id] })
       void queryClient.invalidateQueries({ queryKey: ['invoices'] })
+    }
+  })
+
+  /**
+   * The PDF is opened in a new tab from a Blob.
+   *
+   * window.open must be called synchronously inside the click, or Safari's
+   * popup blocker treats a tab opened after an await as unsolicited. So the
+   * tab is opened first, blank, and pointed at the PDF once it has arrived.
+   */
+  const pdf = useMutation({
+    mutationFn: async () => {
+      const tab = window.open('', '_blank')
+      try {
+        const blob = await api.getBlob(`/invoices/${id}/pdf`)
+        const url = URL.createObjectURL(blob)
+        if (tab) tab.location.href = url
+        else window.location.href = url
+      } catch (error) {
+        tab?.close()
+        throw error
+      }
     }
   })
 
@@ -81,6 +107,10 @@ export function InvoiceDetailPage() {
           <div className="flex items-center gap-3">
             <StatusBadge status={invoice.status} />
 
+            <Button variant="secondary" onClick={() => pdf.mutate()} isLoading={pdf.isPending}>
+              PDF
+            </Button>
+
             {isAdmin && invoice.status === 'DRAFT' && (
               <Button onClick={() => send.mutate()} isLoading={send.isPending}>
                 Skicka faktura
@@ -101,6 +131,7 @@ export function InvoiceDetailPage() {
       />
 
       {send.error && <ErrorMessage error={send.error} />}
+      {pdf.error && <ErrorMessage error={pdf.error} />}
       {paymentLink.error && <ErrorMessage error={paymentLink.error} />}
 
       {invoice.status === 'DRAFT' && (
@@ -134,7 +165,7 @@ export function InvoiceDetailPage() {
                   <td className="py-3 text-slate-900">{item.description}</td>
                   <td className="tabular py-3 text-right text-slate-600">{item.quantity}</td>
                   <td className="tabular py-3 text-right text-slate-600">
-                    {(item.unitPriceOre / 100).toFixed(2).replace('.', ',')}
+                    {plain(item.unitPriceOre)}
                   </td>
                   {/* The rate the line was invoiced at, not today's rate —
                       it is stored per line for exactly this reason. */}
@@ -142,7 +173,7 @@ export function InvoiceDetailPage() {
                     {item.vatRate / 100} %
                   </td>
                   <td className="tabular py-3 text-right font-medium text-slate-900">
-                    {(item.netOre / 100).toFixed(2).replace('.', ',')}
+                    {plain(item.netOre)}
                   </td>
                 </tr>
               ))}
@@ -165,16 +196,14 @@ export function InvoiceDetailPage() {
               {invoice.lateFeeOre > 0 && (
                 <div className="flex justify-between text-red-700">
                   <dt>Dröjsmålsränta</dt>
-                  <dd className="tabular">
-                    {(invoice.lateFeeOre / 100).toFixed(2).replace('.', ',')} SEK
-                  </dd>
+                  <dd className="tabular">{formatOre(invoice.lateFeeOre, invoice.currency)}</dd>
                 </div>
               )}
 
               <div className="flex justify-between border-t border-slate-200 pt-2 text-base font-semibold">
                 <dt className="text-slate-900">Att betala</dt>
                 <dd className="tabular text-slate-900">
-                  {(totalDueOre / 100).toFixed(2).replace('.', ',')} SEK
+                  {formatOre(totalDueOre, invoice.currency)}
                 </dd>
               </div>
             </dl>

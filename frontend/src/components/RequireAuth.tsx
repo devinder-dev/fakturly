@@ -25,7 +25,7 @@ export function RequireAuth({
   /** When set, only this role may see the route. */
   role?: Role
 }) {
-  const { user, isLoading } = useAuth()
+  const { user, isLoading, hasLoggedOut } = useAuth()
   const location = useLocation()
 
   // Render nothing while the initial refresh is still in flight. Redirecting
@@ -37,14 +37,22 @@ export function RequireAuth({
 
   if (!user) {
     // `state` remembers where they were going, so login can send them back
-    // rather than dumping everyone on the dashboard.
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />
+    // rather than dumping everyone on the dashboard. Not after a deliberate
+    // logout: the next login may be a different person, and "return to the
+    // invoice the previous user was reading" is not a feature.
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={hasLoggedOut ? undefined : { from: location.pathname }}
+      />
+    )
   }
 
   if (role && user.role !== role) {
     // Their own start page, not a 403 screen. They are logged in and fine —
     // they simply took a wrong turn.
-    return <Navigate to={user.role === 'ADMIN' ? '/clients' : '/invoices'} replace />
+    return <Navigate to={user.role === 'ADMIN' ? '/dashboard' : '/invoices'} replace />
   }
 
   return <>{children}</>

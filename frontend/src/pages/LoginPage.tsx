@@ -1,11 +1,12 @@
 // LoginPage.tsx
 
 import { useState, type FormEvent } from 'react'
-import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth.tsx'
 import { ApiError } from '../lib/api.ts'
 import { Button, Field, Card } from '../components/ui.tsx'
 import { FullPageSpinner } from '../components/RequireAuth.tsx'
+import { DemoLogins } from '../components/DemoLogins.tsx'
 
 export function LoginPage() {
   const { user, isLoading, login } = useAuth()
@@ -22,8 +23,11 @@ export function LoginPage() {
   if (isLoading) return <FullPageSpinner />
 
   if (user) {
+    // '/app' is the role-aware start page. NOT '/': that is the public
+    // landing page now, and sending a freshly logged-in user there looked
+    // like the login had silently failed.
     const from = (location.state as { from?: string } | null)?.from
-    return <Navigate to={from ?? '/'} replace />
+    return <Navigate to={from ?? '/app'} replace />
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -34,7 +38,7 @@ export function LoginPage() {
     try {
       const loggedIn = await login(email, password)
       const from = (location.state as { from?: string } | null)?.from
-      navigate(from ?? (loggedIn.role === 'ADMIN' ? '/clients' : '/invoices'), {
+      navigate(from ?? (loggedIn.role === 'ADMIN' ? '/dashboard' : '/invoices'), {
         replace: true
       })
     } catch (caught) {
@@ -101,6 +105,15 @@ export function LoginPage() {
 
         <p className="mt-6 text-center text-xs text-slate-500">
           Konton skapas av administratören. Du får en inbjudan via e-post.
+        </p>
+
+        {/* Renders nothing unless the API is in demo mode. */}
+        <DemoLogins className="mt-8" />
+
+        <p className="mt-6 text-center text-xs">
+          <Link to="/" className="text-slate-500 hover:text-slate-900 hover:underline">
+            Om Fakturly
+          </Link>
         </p>
       </div>
     </div>

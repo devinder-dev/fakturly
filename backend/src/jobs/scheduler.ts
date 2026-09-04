@@ -5,9 +5,11 @@
 // BullMQ owns execution and guarantees it eventually happens.
 
 import cron, { type ScheduledTask } from 'node-cron'
-import { getOverdueQueue } from './queues.ts'
+import { getOverdueQueue, getDemoResetQueue } from './queues.ts'
 import { startOverdueWorker } from './workers/overdue.worker.ts'
 import { startEmailWorker } from './workers/email.worker.ts'
+import { startDemoResetWorker } from './workers/demoReset.worker.ts'
+import { env } from '../lib/env.ts'
 import type { Worker } from 'bullmq'
 
 /**
@@ -25,6 +27,18 @@ import type { Worker } from 'bullmq'
 const OVERDUE_CRON = '0 2 * * *'
 const TIMEZONE = 'Europe/Stockholm'
 
+/**
+ * 03:00 — an hour AFTER the overdue run, never before it.
+ *
+ * The reset builds a dataset that already contains overdue invoices with
+ * interest, by running the same overdue check itself. If the scheduled
+ * overdue job then ran on top of a freshly reset database it would find
+ * nothing new to do, which is fine — but the reverse order would have the
+ * overdue job accrue a day's interest on data that is about to be deleted.
+ * Harmless, but wasted work that would show up in the logs as a mystery.
+ */
+const DEMO_RESET_CRON = '0 3 * * *'
+
 export type BackgroundJobs = {
   workers: Worker[]
   tasks: ScheduledTask[]
@@ -39,6 +53,7 @@ export type BackgroundJobs = {
  */
 export function startBackgroundJobs(): BackgroundJobs {
   const workers = [startOverdueWorker(), startEmailWorker()]
+  const tasks: ScheduledTask[] = []
 
   const overdueTask = cron.schedule(
     OVERDUE_CRON,
@@ -56,9 +71,34 @@ export function startBackgroundJobs(): BackgroundJobs {
     { timezone: TIMEZONE }
   )
 
+  tasks.push(overdueTask)
   console.log(`[scheduler] overdue check scheduled: ${OVERDUE_CRON} (${TIMEZONE})`)
 
-  return { workers, tasks: [overdueTask] }
+  // The demo reset exists only when the flag is on. Not "runs and refuses":
+  // in a real deployment the worker is never even constructed, so there is
+  // no queue anyone could push a wipe job onto.
+  if (env.DEMO_MODE) {
+    workers.push(startDemoResetWorker())
+
+    tasks.push(
+      cron.schedule(
+        DEMO_RESET_CRON,
+        () => {
+          void getDemoResetQueue()
+            .add('nightly-demo-reset', { runAt: new Date().toISOString() })
+            .catch((error: unknown) => {
+              console.error('[scheduler] failed to enqueue demo reset', {
+                error: error instanceof Error ? error.message : String(error)
+              })
+            })
+        },
+        { timezone: TIMEZONE }
+      )
+    )
+    console.log(`[scheduler] DEMO MODE — nightly reset scheduled: ${DEMO_RESET_CRON} (${TIMEZONE})`)
+  }
+
+  return { workers, tasks }
 }
 
 export async function stopBackgroundJobs(jobs: BackgroundJobs): Promise<void> {

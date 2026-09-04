@@ -31,6 +31,16 @@ type AuthState = {
   user: User | null
   /** True until the initial refresh attempt has settled. */
   isLoading: boolean
+  /**
+   * True after the user pressed "log out", until the next login.
+   *
+   * The route guard remembers where an unauthenticated visitor was heading
+   * so login can send them back — right for an expired session or a deep
+   * link, wrong after a deliberate logout, where the next person to log in
+   * may be someone else entirely. This flag is how the guard tells the two
+   * apart.
+   */
+  hasLoggedOut: boolean
   login: (email: string, password: string) => Promise<User>
   logout: () => Promise<void>
 }
@@ -40,6 +50,7 @@ const AuthContext = createContext<AuthState | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [hasLoggedOut, setHasLoggedOut] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -80,6 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const data = await api.post<LoginResponse>('/auth/login', { email, password })
     setAccessToken(data.accessToken)
     setUser(data.user)
+    setHasLoggedOut(false)
     return data.user
   }, [])
 
@@ -92,11 +104,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // the wrong answer, and the server-side revocation can be retried.
       setAccessToken(null)
       setUser(null)
+      setHasLoggedOut(true)
     }
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, hasLoggedOut, login, logout }}>
       {children}
     </AuthContext.Provider>
   )

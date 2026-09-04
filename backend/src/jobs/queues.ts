@@ -50,7 +50,9 @@ export const bullConnection: ConnectionOptions = {
  */
 export const QueueName = {
   OVERDUE: 'overdue',
-  EMAIL: 'email'
+  EMAIL: 'email',
+  /** Demo mode only: the nightly wipe-and-reseed. */
+  DEMO_RESET: 'demo-reset'
 } as const
 
 /**
@@ -67,6 +69,11 @@ export type OverdueJobData = {
 export type EmailJobData =
   | { kind: 'overdue-notice'; invoiceId: string }
   | { kind: 'payment-reminder'; invoiceId: string }
+
+export type DemoResetJobData = {
+  /** ISO date the dataset should be built relative to. */
+  runAt: string
+}
 
 /**
  * Shared job options.
@@ -87,6 +94,7 @@ export const defaultJobOptions = {
 
 let overdueQueue: Queue<OverdueJobData> | null = null
 let emailQueue: Queue<EmailJobData> | null = null
+let demoResetQueue: Queue<DemoResetJobData> | null = null
 
 /**
  * Queues are created lazily.
@@ -113,9 +121,27 @@ export function getEmailQueue(): Queue<EmailJobData> {
   return emailQueue
 }
 
+/**
+ * The demo reset queue.
+ *
+ * Same options as the others, with one difference worth noting: a reset that
+ * fails three times leaves the demo half-wiped, which is far worse than one
+ * that never ran. The worker handles that by wiping and reseeding inside a
+ * single call, so a retry starts over rather than continuing from rubble.
+ */
+export function getDemoResetQueue(): Queue<DemoResetJobData> {
+  demoResetQueue ??= new Queue<DemoResetJobData>(QueueName.DEMO_RESET, {
+    connection: bullConnection,
+    prefix: QUEUE_PREFIX,
+    defaultJobOptions
+  })
+  return demoResetQueue
+}
+
 /** Closes any queue that was opened. Called on shutdown and after tests. */
 export async function closeQueues(): Promise<void> {
-  await Promise.all([overdueQueue?.close(), emailQueue?.close()])
+  await Promise.all([overdueQueue?.close(), emailQueue?.close(), demoResetQueue?.close()])
   overdueQueue = null
   emailQueue = null
+  demoResetQueue = null
 }
