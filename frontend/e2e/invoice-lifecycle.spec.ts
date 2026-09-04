@@ -93,7 +93,7 @@ test('an invoice is written, sent, printed, paid and settled', async ({ page, re
   // ── See it settle ────────────────────────────────────────────
   await page.reload()
   await expect(badge(page, 'Betald')).toBeVisible()
-  await expect(page.getByText('Betalning mottagen')).toBeVisible()
+  await expect(page.getByText('Betalning mottagen', { exact: true })).toBeVisible()
   await expect(page.getByText('Utestående enligt huvudboken')).toBeVisible()
   await expect(page.locator('tr.bg-slate-50 td').last()).toHaveText('0,00 SEK')
 
