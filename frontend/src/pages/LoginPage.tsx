@@ -1,7 +1,7 @@
 // LoginPage.tsx
 
 import { useState, type FormEvent } from 'react'
-import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth.tsx'
 import { ApiError } from '../lib/api.ts'
 import { Button, Field, Card } from '../components/ui.tsx'
@@ -10,7 +10,6 @@ import { DemoLogins } from '../components/DemoLogins.tsx'
 
 export function LoginPage() {
   const { user, isLoading, login } = useAuth()
-  const navigate = useNavigate()
   const location = useLocation()
 
   const [email, setEmail] = useState('')
@@ -36,11 +35,10 @@ export function LoginPage() {
     setIsSubmitting(true)
 
     try {
-      const loggedIn = await login(email, password)
-      const from = (location.state as { from?: string } | null)?.from
-      navigate(from ?? (loggedIn.role === 'ADMIN' ? '/dashboard' : '/invoices'), {
-        replace: true
-      })
+      await login(email, password)
+      // No navigate() here. Setting the user re-renders this page, and the
+      // `if (user)` branch above sends them on — to where they were going,
+      // or to the role-aware start page. One redirect rule, not two racing.
     } catch (caught) {
       /**
        * Show the API's message verbatim.

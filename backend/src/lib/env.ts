@@ -79,6 +79,15 @@ const envSchema = z.object({
   COMPANY_BANKGIRO: z.string().min(1).default('123-4567'),
 
   /**
+   * Error tracking. Optional everywhere: without a DSN the Sentry SDK is
+   * never initialised and nothing leaves the server. With one, unexpected
+   * errors (the ones the error handler maps to 500) are reported with their
+   * stack trace and request id — which is what makes "error req-42" from a
+   * user findable without grepping logs.
+   */
+  SENTRY_DSN: z.string().optional(),
+
+  /**
    * Demo mode — the public showcase deployment.
    *
    * When on, the API exposes the demo login credentials at GET /demo, and a
