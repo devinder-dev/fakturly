@@ -2,6 +2,11 @@
 // All app configuration lives in app.ts; this file only handles startup and
 // controlled shutdown.
 
+// Sentry before anything else, so an error while building the app is
+// reported too. The module is a no-op without SENTRY_DSN.
+import { initSentry } from './lib/sentry.ts'
+initSentry()
+
 import { buildApp } from './app.ts'
 import { env } from './lib/env.ts'
 import { startBackgroundJobs, stopBackgroundJobs } from './jobs/scheduler.ts'

@@ -794,12 +794,71 @@ explanation is disputed less than one that changed overnight.
 
 ---
 
+## 44. The API reference is assembled from the validators, and tested against the routes
+
+**Decision:** `GET /docs` serves Swagger UI over a document built in
+`src/docs/openapi.ts`. Request bodies and query parameters come from the Zod
+schemas via `z.toJSONSchema`; the route list and response shapes are written
+by hand.
+
+**Why not `@fastify/swagger`:** the routes validate in controllers with
+`schema.parse`, not through Fastify's schema option. Moving validation into
+Fastify to generate docs would mean a second error format, changes to the
+error handler and every test — for documentation.
+
+**The risk of a hand-written list is drift**, so `openapi.test.ts` parses
+`printRoutes()` and checks both directions: every registered route is
+documented, every documented route exists. A route added without a docs entry
+fails CI.
+
+**Public**, because the document describes shape, not data, and the frontend
+bundle reveals the endpoints anyway. One line moves it behind the admin role.
+
+---
+
+## 45. Three kinds of test, each at the boundary it can actually reach
+
+| Kind | Where | Runs against | Answers |
+|---|---|---|---|
+| Backend integration (bun:test) | `backend/tests` | real Postgres + Redis | do the rules hold under concurrency, rollback, TTL |
+| Frontend unit (Vitest + Testing Library) | `frontend/src/**/*.test.tsx` | jsdom, `fetch` faked | do components render what they are given; is the login error shown verbatim |
+| End to end (Playwright) | `frontend/e2e` | a browser, the built app, the real API, seeded demo data | does the whole thing work: write → send → PDF → webhook → PAID |
+
+**What the e2e test is for:** the one path where a bug in any layer shows up
+as a wrong word on a screen. It signs the Stripe webhook with the stub
+secret, exactly as the backend test does, and then reads the ledger off the
+page. One such test; the rest of the confidence comes from the cheaper
+layers.
+
+**Vitest rather than bun:test for the frontend:** it shares Vite's config,
+so JSX, Tailwind and `import.meta.env` behave as in the app, and jsdom is a
+setting. The backend needs none of that.
+
+---
+
+## 46. Error tracking is optional and reports nothing personal
+
+**Decision:** Sentry, behind `SENTRY_DSN` on the API and `VITE_SENTRY_DSN` in
+the browser. Without a DSN the SDK is never initialised.
+
+**Only unexpected errors are reported** — the error handler's branch 5, the
+one that becomes a 500. A wrong password, a 404, a business-rule refusal are
+outcomes, not errors, and reporting them would bury the real ones.
+
+**Tagged with the request id** the client was shown, so "error req-42" from a
+user leads to a stack trace without grepping logs.
+
+**`sendDefaultPii: false`, no tracing, no replay.** An error report exists to
+find a broken code path, not to watch a user.
+
+---
+
 ## Open decisions
 
 | Question | Status |
 |---|---|
-| Swagger/OpenAPI docs for the API? | Undecided |
+| Swagger/OpenAPI docs for the API? | Done — ADR 44 |
 | Superadmin role above ADMIN? | Undecided |
 | BullMQ dashboard for job monitoring? | Undecided |
-| Frontend protected-route guards | Deferred to Week 4 |
+| Frontend protected-route guards | Done — `RequireAuth`, a usability control; the API is the security |
 | 2FA / BankID | Deferred — post-MVP |
