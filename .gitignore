@@ -36,3 +36,6 @@ CLAUDE.local.md
 
 # Prisma genererad klient — genereras från schema.prisma, committa inte
 backend/src/generated/
+
+# Vite build output
+frontend/dist/

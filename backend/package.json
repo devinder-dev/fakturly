@@ -7,6 +7,7 @@
     "dev": "bun --watch src/server.ts",
     "start": "bun src/server.ts",
     "seed": "bun prisma/seed.ts",
+    "seed:demo": "bun prisma/seed-demo.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:unit": "bun test tests/unit",
@@ -16,10 +17,12 @@
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
+    "@fastify/cors": "^11.3.0",
     "@fastify/rate-limit": "^11.1.0",
     "@node-rs/argon2": "^2.0.2",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
+    "@react-pdf/renderer": "^4.9.0",
     "bullmq": "^6.1.1",
     "dotenv": "^17.4.2",
     "fast-jwt": "^6.3.2",
@@ -28,6 +31,7 @@
     "ioredis": "^5.11.1",
     "node-cron": "^4.6.0",
     "pg": "^8.22.0",
+    "react": "^19.2.8",
     "resend": "^6.20.0",
     "stripe": "^22.5.0",
     "zod": "^4.4.3"
@@ -35,6 +39,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/node-cron": "^3.0.11",
+    "@types/react": "^19.2.18",
     "prisma": "^7.8.0",
     "typescript": "^5.7.0"
   }

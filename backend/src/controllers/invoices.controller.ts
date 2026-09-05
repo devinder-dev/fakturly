@@ -8,6 +8,7 @@ import {
 import { idParamSchema } from '../validators/client.validator.ts'
 import * as invoiceService from '../services/invoice.service.ts'
 import * as paymentService from '../services/payment.service.ts'
+import * as pdfService from '../services/pdf.service.tsx'
 import { formatOre } from '../lib/money.ts'
 import { UnauthenticatedError } from '../lib/errors.ts'
 import type { InvoiceRecord } from '../repositories/invoice.repository.ts'
@@ -111,6 +112,34 @@ export async function getInvoice(request: FastifyRequest, reply: FastifyReply) {
   const invoice = await invoiceService.getInvoiceForCaller(id, caller)
 
   return reply.code(200).send({ invoice: toPublicInvoice(invoice) })
+}
+
+/**
+ * GET /invoices/:id/pdf
+ *
+ * `inline` rather than `attachment`: the browser shows the document in a tab
+ * and the user chooses whether to save it. The filename is still supplied so
+ * that "save" produces faktura-2026-0007.pdf rather than "pdf".
+ *
+ * `no-store`: a sent invoice never changes, but a DRAFT does, and an
+ * overdue one gains interest daily. Better one render per request than a
+ * cached PDF showing yesterday's amount.
+ */
+export async function getInvoicePdf(request: FastifyRequest, reply: FastifyReply) {
+  const { id } = idParamSchema.parse(request.params)
+  const caller = requireCaller(request)
+
+  // The ownership check. Everything below happens on a record this caller
+  // was allowed to load.
+  const invoice = await invoiceService.getInvoiceForCaller(id, caller)
+  const pdf = await pdfService.renderInvoicePdf(invoice)
+
+  return reply
+    .code(200)
+    .type('application/pdf')
+    .header('content-disposition', `inline; filename="${pdf.filename}"`)
+    .header('cache-control', 'no-store')
+    .send(pdf.bytes)
 }
 
 export async function sendInvoice(request: FastifyRequest, reply: FastifyReply) {

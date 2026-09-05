@@ -6,6 +6,7 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import cookie from '@fastify/cookie'
 import { isProduction, isTest } from './lib/env.ts'
+import corsPlugin from './plugins/cors.ts'
 import errorHandlerPlugin from './plugins/errorHandler.ts'
 import prismaPlugin from './plugins/prisma.ts'
 import rateLimitPlugin from './plugins/rateLimit.ts'
@@ -13,6 +14,8 @@ import redisPlugin from './plugins/redis.ts'
 import authRoutes from './routes/auth.routes.ts'
 import clientRoutes from './routes/clients.routes.ts'
 import invoiceRoutes from './routes/invoices.routes.ts'
+import dashboardRoutes from './routes/dashboard.routes.ts'
+import demoRoutes from './routes/demo.routes.ts'
 import webhookRoutes from './routes/webhooks.routes.ts'
 
 // buildApp creates a fresh app every time it is called.
@@ -59,6 +62,11 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Error handler FIRST. Registered after the routes, Fastify would use its
   // own default handler for anything thrown before this point.
   await app.register(errorHandlerPlugin)
+
+  // CORS before the routes, so a rejected origin is refused before any
+  // handler runs. Note this protects browsers, not the API — curl and
+  // server-to-server calls never ask permission.
+  await app.register(corsPlugin)
 
   // Then infrastructure — routes need the database and Redis.
   await app.register(prismaPlugin)
@@ -109,6 +117,12 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   // Invoices.
   await app.register(invoiceRoutes)
+
+  // Admin dashboard — aggregates over the ledger.
+  await app.register(dashboardRoutes)
+
+  // Demo accounts. The plugin registers nothing unless DEMO_MODE is on.
+  await app.register(demoRoutes)
 
   // Webhooks. Registered LAST and inside its own scope, because it overrides
   // the JSON body parser to keep the raw bytes for signature verification.
