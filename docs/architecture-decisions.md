@@ -689,12 +689,176 @@ but wrong. `AuthProvider` exposes `hasLoggedOut`; the guard consults it.
 
 ---
 
+## 40. A sent invoice is corrected by a credit note, never edited
+
+**Context:** an invoice went out with the wrong amount. Every CRUD tutorial
+answers with an edit form; bokföringslagen does not allow it.
+
+**Decision:** `POST /invoices/:id/credit-note` creates a NEW document — type
+`CREDIT_NOTE`, the next number in the SAME series, every line mirrored with a
+negated quantity — and moves the original to `CREDITED`. Five writes in one
+transaction: the status change (guarded by expected status in the WHERE
+clause), the new document, a `CREDIT_NOTE_ISSUED` row for minus the gross,
+and a write-off row for any interest and any reminder fee.
+
+**Where the ledger rows go — on the original, not the credit note.** The
+ledger follows the receivable: the original's rows now sum to exactly zero,
+which is the property a customer or auditor checks. The credit note is the
+document that explains why. Rows on the credit note instead would leave the
+original's ledger claiming money that will never arrive.
+
+**Same number series**, because the law counts credit notes as invoices. A
+separate series would leave gaps in the "real" one that someone must explain.
+
+**Not allowed: crediting a PAID invoice.** That is a refund — money moving
+back to the customer, with a Stripe call and its own ledger rows. The
+transition table refuses it rather than half-doing it. Partial credit notes
+are the other natural extension; full credit came first because it has no
+ambiguity about interest and fees (everything is written off).
+
+**Consequence found by test:** a credit note is `SENT` with a due date, so the
+overdue job had to learn `type: 'INVOICE'`, or every credit note would turn
+overdue the next night and accrue negative interest.
+
+---
+
+## 41. The reminder fee is charged once, by the database
+
+**Context:** lag (1981:739) om ersättning för inkassokostnader allows one
+reminder fee of 60 kr per debt — and only if the invoice said so in advance.
+
+**Decision:** `POST /invoices/:id/reminder` charges the fee on the first call
+and merely re-sends on every later one. The "once" is `reminderFeeOre: 0` in
+the UPDATE's WHERE clause, not a check in the service. Two admins pressing the
+button at the same instant cannot both charge.
+
+**Separate column from interest** (`reminderFeeOre` beside `lateFeeOre`),
+because they are different legal things — interest compensates for time, the
+fee for the cost of chasing — and the PDF, the SIE export and the customer
+must see them apart. `totalDueOre()` in `lib/money.ts` is the one place the
+three parts are added, so no screen can forget one.
+
+**The terms are printed on every invoice** — "påminnelseavgift om 60,00 SEK" —
+precisely because the fee is only chargeable if they were.
+
+**The email goes through the queue**, after the fee is committed. A mail
+outage must not lose the fee; a retry must not charge it twice.
+
+**Also wired here:** sending an invoice now emails the customer. The function
+had existed since week 3 and nothing called it.
+
+---
+
+## 42. Reports are computed, and exported in the formats accountants use
+
+**Decision:** three admin reports, each a pure transformation of repository
+reads, each with `asOf` or a period as an argument.
+
+- **Kundreskontra (aging):** open invoices bucketed by days past due, per
+  client, amounts including interest and fees. Bucketing in the service, not
+  SQL — the set of open invoices is small and the edges are a business rule.
+- **Momsrapport:** net and VAT per rate over documents ISSUED in the period
+  (`sentAt`, `to` exclusive). `groupBy` in the database. Credit notes are
+  negative lines, so they reduce the period exactly as Skatteverket expects.
+- **SIE 4:** every ledger row becomes one balanced verification on the BAS
+  chart of accounts: invoices as 1510 against 300x/26xx per VAT rate,
+  payments 1930/1510, interest 8313, fees 3590. `buildSie` throws on a
+  verification that does not balance — better here than in the auditor's
+  import.
+
+**CSV is Swedish CSV:** semicolon separator (a comma is the decimal
+separator here), UTF-8 BOM (or åäö arrive as Ã¥Ã¤Ã¶), CRLF, and a leading
+tab before `=`, `+`, `-`, `@` so a customer-typed description cannot execute
+as a formula when opened in Excel.
+
+**SIE is CP437:** the 1990s encoding the specification names and every
+importer accepts. Only the Swedish letters need mapping; anything else
+non-ASCII becomes a visible `?` rather than a silently wrong byte.
+
+**The SIE export is audited** — a GET with no side effect on our data, but
+the moment the ledger leaves the system.
+
+---
+
+## 43. The audit log is readable, and still only ever appended
+
+**Decision:** `GET /audit-log` (admin) pages the log with filters on action,
+user and resource. The repository gains a read function beside its one
+insert. There is no route, service or repository function that updates or
+deletes an entry — the invoice page's "Händelser" panel and the log screen
+are views of rows that cannot change.
+
+**Every invoice response carries its ledger** (`ledger[]`), for both roles.
+The customer sees where the number came from; a figure with a visible
+explanation is disputed less than one that changed overnight.
+
+---
+
+## 44. The API reference is assembled from the validators, and tested against the routes
+
+**Decision:** `GET /docs` serves Swagger UI over a document built in
+`src/docs/openapi.ts`. Request bodies and query parameters come from the Zod
+schemas via `z.toJSONSchema`; the route list and response shapes are written
+by hand.
+
+**Why not `@fastify/swagger`:** the routes validate in controllers with
+`schema.parse`, not through Fastify's schema option. Moving validation into
+Fastify to generate docs would mean a second error format, changes to the
+error handler and every test — for documentation.
+
+**The risk of a hand-written list is drift**, so `openapi.test.ts` parses
+`printRoutes()` and checks both directions: every registered route is
+documented, every documented route exists. A route added without a docs entry
+fails CI.
+
+**Public**, because the document describes shape, not data, and the frontend
+bundle reveals the endpoints anyway. One line moves it behind the admin role.
+
+---
+
+## 45. Three kinds of test, each at the boundary it can actually reach
+
+| Kind | Where | Runs against | Answers |
+|---|---|---|---|
+| Backend integration (bun:test) | `backend/tests` | real Postgres + Redis | do the rules hold under concurrency, rollback, TTL |
+| Frontend unit (Vitest + Testing Library) | `frontend/src/**/*.test.tsx` | jsdom, `fetch` faked | do components render what they are given; is the login error shown verbatim |
+| End to end (Playwright) | `frontend/e2e` | a browser, the built app, the real API, seeded demo data | does the whole thing work: write → send → PDF → webhook → PAID |
+
+**What the e2e test is for:** the one path where a bug in any layer shows up
+as a wrong word on a screen. It signs the Stripe webhook with the stub
+secret, exactly as the backend test does, and then reads the ledger off the
+page. One such test; the rest of the confidence comes from the cheaper
+layers.
+
+**Vitest rather than bun:test for the frontend:** it shares Vite's config,
+so JSX, Tailwind and `import.meta.env` behave as in the app, and jsdom is a
+setting. The backend needs none of that.
+
+---
+
+## 46. Error tracking is optional and reports nothing personal
+
+**Decision:** Sentry, behind `SENTRY_DSN` on the API and `VITE_SENTRY_DSN` in
+the browser. Without a DSN the SDK is never initialised.
+
+**Only unexpected errors are reported** — the error handler's branch 5, the
+one that becomes a 500. A wrong password, a 404, a business-rule refusal are
+outcomes, not errors, and reporting them would bury the real ones.
+
+**Tagged with the request id** the client was shown, so "error req-42" from a
+user leads to a stack trace without grepping logs.
+
+**`sendDefaultPii: false`, no tracing, no replay.** An error report exists to
+find a broken code path, not to watch a user.
+
+---
+
 ## Open decisions
 
 | Question | Status |
 |---|---|
-| Swagger/OpenAPI docs for the API? | Undecided |
+| Swagger/OpenAPI docs for the API? | Done — ADR 44 |
 | Superadmin role above ADMIN? | Undecided |
 | BullMQ dashboard for job monitoring? | Undecided |
-| Frontend protected-route guards | Deferred to Week 4 |
+| Frontend protected-route guards | Done — `RequireAuth`, a usability control; the API is the security |
 | 2FA / BankID | Deferred — post-MVP |

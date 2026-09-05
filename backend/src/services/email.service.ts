@@ -145,11 +145,17 @@ export async function sendReminderEmail(params: {
   to: string
   clientName: string
   invoiceNumber: string
+  /** Everything owed now: gross, interest and any reminder fee. */
   amountOre: number
+  /** The statutory fee, when one has been charged. Stated on its own line. */
+  reminderFeeOre: number
+  lateFeeOre: number
   currency: string
   dueDate: Date
   invoiceId: string
 }): Promise<boolean> {
+  const overdue = params.dueDate.getTime() < Date.now()
+
   return sendAndLog({
     to: params.to,
     type: 'REMINDER',
@@ -158,11 +164,25 @@ export async function sendReminderEmail(params: {
     text: [
       `Hej ${params.clientName},`,
       '',
-      `En vänlig påminnelse om faktura ${params.invoiceNumber}.`,
+      overdue
+        ? `Faktura ${params.invoiceNumber} förföll ${params.dueDate.toLocaleDateString('sv-SE')} och är ännu inte betald.`
+        : `En vänlig påminnelse om faktura ${params.invoiceNumber}, som förfaller ${params.dueDate.toLocaleDateString('sv-SE')}.`,
       '',
-      `Belopp: ${formatOre(params.amountOre, params.currency)}`,
-      `Förfallodatum: ${params.dueDate.toLocaleDateString('sv-SE')}`,
+      `Att betala: ${formatOre(params.amountOre, params.currency)}`,
+      ...(params.lateFeeOre > 0
+        ? [`varav dröjsmålsränta: ${formatOre(params.lateFeeOre, params.currency)}`]
+        : []),
+      ...(params.reminderFeeOre > 0
+        ? [`varav påminnelseavgift: ${formatOre(params.reminderFeeOre, params.currency)}`]
+        : []),
       '',
+      ...(params.reminderFeeOre > 0
+        ? [
+            'Påminnelseavgiften är lagstadgad (lag 1981:739 om ersättning för',
+            'inkassokostnader) och angavs som villkor på fakturan.',
+            ''
+          ]
+        : []),
       'Har du redan betalat kan du bortse från det här mejlet.',
       '',
       'Vänliga hälsningar,',

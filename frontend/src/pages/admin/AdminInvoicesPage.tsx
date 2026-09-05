@@ -21,7 +21,8 @@ const STATUSES: Array<{ value: InvoiceStatus | ''; label: string }> = [
   { value: 'DRAFT', label: 'Utkast' },
   { value: 'SENT', label: 'Skickade' },
   { value: 'OVERDUE', label: 'Förfallna' },
-  { value: 'PAID', label: 'Betalda' }
+  { value: 'PAID', label: 'Betalda' },
+  { value: 'CREDITED', label: 'Krediterade' }
 ]
 
 export function AdminInvoicesPage() {
@@ -150,7 +151,7 @@ export function AdminInvoicesPage() {
                         {formatDate(invoice.dueDate)}
                       </td>
                       <td className="px-6 py-4">
-                        <StatusBadge status={invoice.status} />
+                        <StatusBadge status={invoice.status} type={invoice.type} />
                       </td>
                       <td className="tabular px-6 py-4 text-right font-medium text-slate-900">
                         {invoice.formatted.grossTotal}

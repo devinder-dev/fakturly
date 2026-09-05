@@ -11,21 +11,38 @@ Not a CRUD tutorial — every decision is documented with its reasoning and the 
 [![Fastify](https://img.shields.io/badge/Fastify-5-000000?logo=fastify&logoColor=white)](https://fastify.dev)
 [![Prisma](https://img.shields.io/badge/Prisma-7-2D3748?logo=prisma&logoColor=white)](https://www.prisma.io)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org)
-[![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](https://redis.io)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev)
 [![CI](https://github.com/devinder-dev/fakturly/actions/workflows/ci.yml/badge.svg)](https://github.com/devinder-dev/fakturly/actions/workflows/ci.yml)
 
-**[📐 Architecture Decision Record](docs/architecture-decisions.md)** · **[📖 Auth walkthrough](docs/auth-phase-walkthrough.md)** · **[🔌 Integrations](docs/integrations.md)**
+**[📐 Architecture decisions](docs/architecture-decisions.md)** · **[🚀 Deployment](docs/deployment.md)** · **[🎤 How to present it](docs/presentation.md)** · **[📖 Auth walkthrough](docs/auth-phase-walkthrough.md)** · **[🔌 Integrations](docs/integrations.md)**
 
 </div>
 
 ---
 
-> [!NOTE]
-> **Actively being built.** Auth and invoicing are done and tested — an admin
-> can provision a customer, issue a VAT-correct invoice, and the customer sees
-> only their own, Stripe payments settle invoices, and overdue interest
-> accrues nightly. The frontend is next. See
-> **[Status](#-status)** — no feature is claimed here before it runs.
+> [!TIP]
+> **Try it.** Run it locally in three commands (below), log in with the demo
+> buttons on the landing page, and open an overdue invoice. Or read
+> [the ten-minute tour](docs/presentation.md).
+
+## What it is
+
+Two portals over one ledger.
+
+| Admin portal | Client portal |
+|---|---|
+| Dashboard from the ledger, clients, invoices with VAT per line | Own invoices only — scoped in the query, not the browser |
+| Send, remind (statutory fee, once), credit (kreditfaktura), Stripe payment link | Status, amount due with interest, PDF download |
+| Kundreskontra, momsrapport, SIE 4 export, CSV | |
+| Audit log, per-invoice ledger and event trail | |
+
+Behind them: a nightly job that marks invoices overdue and accrues interest
+under **räntelagen**, a Stripe webhook with three layers of idempotency, an
+append-only ledger, and an audit log nothing can delete.
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="Admin dashboard: outstanding, overdue, twelve months of invoiced vs received, top debtors" width="800" />
+</p>
 
 ## Why this exists
 
@@ -33,49 +50,55 @@ Most invoicing tutorials get three things wrong that matter enormously in produc
 
 ```ts
 amount: 99.99                          // floats lose money
-await prisma.invoice.delete({ ... })   // deleted ledger rows break audits
-if (!user) return res.status(404)      // leaks your entire customer list
+await prisma.invoice.update({ ... })   // editing a sent invoice rewrites history
+if (!owner) return res.status(403)     // confirms the row exists — enumerates your customers
 ```
 
-Fakturly is an attempt to get these right — and to understand *why* each rule
-exists. All 28 decisions, and the alternative rejected for each, are in
-[`docs/architecture-decisions.md`](docs/architecture-decisions.md).
+Fakturly gets these right and writes down *why*. All **46 decisions**, each with
+the alternative rejected, are in [`docs/architecture-decisions.md`](docs/architecture-decisions.md).
 
-## How it works
+### The four rules it actually follows
 
-The flow below is what's actually implemented today — admin login through
-invoice creation. Payment collection is the next piece being built.
+**1. Money is never a float.** Every amount is an integer count of öre, named
+so the unit is unmistakable — `grossTotalOre`, `lateFeeOre`. VAT is rounded per
+line, half away from zero, so a credit note cancels its invoice to the öre.
+Conversion to kronor happens once, at the display edge.
 
-```mermaid
-sequenceDiagram
-    actor Admin
-    actor Client
-    participant API as Fastify API
-    participant DB as PostgreSQL
-    participant Redis
-    participant Resend
+**2. Financial history is append-only.** `Transaction` and `AuditLog` rows are
+never updated or deleted. A sent invoice is corrected with a **credit note** —
+a new document in the same number series — whose ledger rows bring the
+original to exactly zero.
 
-    Admin->>API: POST /auth/login
-    API->>Redis: rate limit + lockout check
-    API->>DB: verify Argon2id hash (constant-time either way)
-    API-->>Admin: access token (15 min) + refresh token (rotating)
+<p align="center">
+  <img src="docs/screenshots/invoice-ledger.png" alt="A credited invoice: the ledger shows the invoice, interest, reminder fee, the credit note and the write-offs summing to zero" width="800" />
+</p>
 
-    Admin->>API: POST /clients
-    API->>DB: create User + Client in one transaction
-    API->>Resend: send set-password invite link
-    API->>DB: AuditLog entry
+**3. Every auth failure looks identical.** Wrong password, unknown email and
+locked account return the same status, the same message, and take the same
+time — enforced structurally, by a single error class, so no refactor can
+reintroduce the leak. Ownership failures answer 404, never 403.
 
-    Admin->>API: POST /invoices
-    API->>DB: reserve next invoice number (concurrency-safe series)
-    API->>DB: create Invoice + line items — VAT per line, exact öre math
-    API->>DB: AuditLog entry
+**4. Idempotency is layered.** Stripe delivers webhooks at least once and
+retries for days. The event id is claimed *before* the work, the status guard
+lives in the `WHERE` clause, and the reminder fee's "once per debt" is a
+column condition — not a check in the service that two clicks can race past.
 
-    Client->>API: GET /invoices
-    API->>DB: ownership check — a client only ever sees their own
-    API-->>Client: invoice list
+## Swedish accounting, done properly
 
-    Note over API,DB: Stripe payment + webhook + automatic late fees — next up
-```
+| | |
+|---|---|
+| **Invoice number** | Unbroken series per year, allocated with one atomic `INSERT … ON CONFLICT` — no lost-update race at month end |
+| **VAT** | Per line, in basis points, mixed rates on one invoice; net, VAT and gross stated separately as the law requires |
+| **PDF** | Every field mervärdesskattelagen lists, VAT per rate, *Godkänd för F-skatt*, bankgiro, and a Luhn-checked **OCR reference** the customer's bank validates before the money leaves |
+| **Late interest** | Räntelagen: reference rate + 8 points, per day, one ledger row per accrual — not a flat penalty, which is unenforceable |
+| **Reminder fee** | 60 kr under lag (1981:739), once per debt, and only because the terms are printed on the invoice |
+| **Credit notes** | Same series, mirror-image lines, original → `CREDITED`, interest and fee written off; a PAID invoice is refused (that is a refund) |
+| **Reports** | Kundreskontra with an *as-of* date, momsrapport per rate with credit notes negative, **SIE 4** on the BAS chart in CP437 |
+| **CSV** | Semicolons, BOM, CRLF, formulas neutralised — a file Swedish Excel opens correctly |
+
+<p align="center">
+  <img src="docs/screenshots/aging.png" alt="Kundreskontra: who owes what, bucketed by days overdue" width="800" />
+</p>
 
 ## Architecture
 
@@ -95,46 +118,32 @@ flowchart TD
 
     Repo --> PG[("PostgreSQL<br/>invoices · ledger · audit")]
     S --> Redis[("Redis<br/>rate limits · denylist · queue")]
-    Redis --> W["BullMQ workers<br/><i>late fees · emails</i>"]
-    W --> Repo
+    Redis --> W["BullMQ workers<br/><i>late fees · emails · demo reset</i>"]
+    W --> S
     Stripe["Stripe webhook"] -->|signed| R
 ```
 
 **Each layer may only call the one below it.** Services take plain arguments
-and never touch `request` — which is what lets the (upcoming) overdue-invoice
-job reuse the exact same business logic from a BullMQ worker, where no HTTP
-request exists.
+and never see a request — which is what lets the nightly overdue job, the
+demo seed and the API run the exact same code.
 
-## 📊 Status
+## Tested where it can break
 
-| Component | State |
-|---|---|
-| Docker: PostgreSQL 16 + Redis 7, health-checked | ✅ |
-| Fastify app, fail-fast env validation, graceful shutdown | ✅ |
-| Prisma schema — users, clients, invoices, immutable ledger, audit log | ✅ |
-| Input validation, breach checking, two-layer rate limiting | ✅ |
-| Argon2id hashing, login / refresh / logout with token rotation + theft detection | ✅ |
-| `authenticate` / `authorize` middleware, Redis denylist, audit logging | ✅ |
-| Admin seed + atomic client provisioning | ✅ |
-| Client CRUD with ownership (IDOR) checks | ✅ |
-| VAT per line item, mixed rates, exact öre arithmetic | ✅ |
-| Invoice numbering — unbroken series, concurrency-safe | ✅ |
-| Invoice creation, reads, send, immutable ledger | ✅ |
-| CI: typecheck, migrations, full suite on every push | ✅ |
-| Set-password invite email, single-use expiring tokens | ✅ |
-| Stripe Checkout + webhook, three layers of idempotency | ✅ |
-| Statutory late fees (räntelagen), daily accrual | ✅ |
-| BullMQ workers + cron scheduler, retries and backoff | ✅ |
-| React frontend, PDF invoices | ⏳ next |
+| Kind | Count | Against |
+|---|---|---|
+| Backend integration (`bun test`) | **410** across 28 files | a real PostgreSQL and Redis — transactions that must roll back, unique constraints, an atomic counter under 50 concurrent writers, TTLs expiring |
+| Frontend unit (Vitest + Testing Library) | 18 | jsdom, with `fetch` faked and nothing else |
+| End to end (Playwright) | 2 | a real browser, the built app, the real API: blank form → sent → PDF → Stripe webhook → PAID, with the ledger read off the screen |
 
-**312 tests / 657 assertions** pass across 17 suites, zero failures, in CI
-against a real PostgreSQL and Redis on every push — including a measured
-timing-attack defence, a forced transaction rollback leaving neither row, a
-refresh-token replay triggering family-wide revocation, and 50 concurrent
-invoice numbers forming an unbroken series.
+Plus: a test that fails if a route exists without an entry in the
+[API reference](docs/screenshots/api-docs.png), a test that fails if a SIE
+verification does not balance, and CI that builds the Docker image and refuses
+a committed secret.
 
 ```bash
-cd backend && bun test
+cd backend && bun test            # needs docker compose up -d
+cd frontend && bun run test       # unit
+cd frontend && bun run test:e2e   # needs the demo dataset: cd backend && bun run seed:demo
 ```
 
 ## Quick start
@@ -144,65 +153,26 @@ Requires [Bun](https://bun.sh) and Docker.
 ```bash
 git clone https://github.com/devinder-dev/fakturly.git
 cd fakturly
-
-docker compose up -d              # PostgreSQL + Redis
+docker compose up -d                       # PostgreSQL + Redis
 
 cd backend
-cp .env.example .env              # then fill in the values
+cp .env.example .env                       # defaults work locally; Stripe and Resend are stubbed
 bun install
 bunx prisma migrate deploy
-bun run dev                       # http://localhost:3000
+bun run seed:demo                          # a year of invoices, two demo logins
+DEMO_MODE=true bun run dev                 # http://localhost:3000, docs at /docs
+
+cd ../frontend
+bun install
+bun run dev                                # http://localhost:5173
 ```
 
-```bash
-curl localhost:3000/health/ready
-# {"status":"ready","database":"up","redis":"up"}
-```
+Open the landing page and press **Som administratör**. The demo login is
+`admin@demo.fakturly.se` / `demo-admin-fakturly-2026`; the client is
+`kund@demo.fakturly.se` / `demo-kund-fakturly-2026`.
 
-<details>
-<summary><b>The reasoning behind the code</b> — four principles it actually follows (click)</summary>
-
-### 1. Money is never a float
-
-Every amount is an integer count of *öre* (1 SEK = 100 öre), named so the unit
-is unmistakable: `amountOre`, `unitPriceOre`, `lateFeeOre`. Conversion happens
-only at the display edge, never in business logic.
-
-```ts
-amount: 9999   // 99.99 SEK, exact, always — never 99.99 as a float
-```
-
-### 2. Financial history is append-only
-
-`Transaction` and `AuditLog` rows are never updated or deleted. A correction
-is a **new** row with a negative amount — if a row can be edited, history is
-not evidence.
-
-```ts
-await prisma.transaction.create({
-  type: 'ADJUSTMENT',
-  amountOre: -500,
-  description: 'Rättelse för faktura #123'
-})
-```
-
-### 3. Every auth failure looks identical
-
-Wrong password, unknown email, and locked account return the same status, the
-same message, and take the same amount of time — enforced *structurally*, so
-no future refactor can accidentally reintroduce the leak.
-
-### 4. Errors never leak internals
-
-Prisma's own message is `Unique constraint failed on the fields: (email)` —
-returning that confirms an address is registered. One central handler logs
-everything and returns the minimum:
-
-```jsonc
-{ "error": { "code": "CONFLICT", "message": "Resursen kunde inte skapas", "requestId": "req-42" } }
-```
-
-</details>
+Deploying to Render + Neon + Vercel is one Blueprint and one page of
+instructions: [`docs/deployment.md`](docs/deployment.md).
 
 <details>
 <summary><b>Security controls</b> (click)</summary>
@@ -213,27 +183,16 @@ everything and returns the minimum:
 | **Password policy** | NIST SP 800-63B — length over complexity, no composition rules, no forced rotation, NFKC-normalised |
 | **Breach checking** | HaveIBeenPwned k-anonymity — only 5 characters of a SHA-1 hash ever leave the server |
 | **Rate limiting** | Two layers in Redis: per IP (brute force) and per account (distributed attacks) |
-| **Anti-enumeration** | Attempts counted for addresses that *don't exist*, so response timing reveals nothing |
-| **Lockout** | Progressive delays first (0 → 100ms → 400ms → 1.6s), because pure lockout lets anyone lock you out of your own account |
+| **Anti-enumeration** | Same error, same time, for every auth failure; 404 not 403 for someone else's row |
+| **Lockout** | Progressive delays first (0 → 100 ms → 400 ms → 1.6 s), because pure lockout lets anyone lock you out of your own account |
 | **Token rotation** | Refresh token reuse revokes the entire token family — replay means it was stolen |
 | **Token storage** | SHA-256 for refresh tokens, Argon2id for passwords: *match the hash to the entropy of the input* |
-| **Input validation** | Zod on every route; `role` is never read from a request body |
+| **Access token** | 15 minutes, in memory in the browser (never localStorage), Redis denylist so logout is real |
+| **Input validation** | Zod on every route; `role` is never read from a request body; totals are never accepted, only derived |
+| **Webhooks** | Signature verified over the raw bytes; the stub signs with the same HMAC scheme so the check is exercised without an account |
 | **Log redaction** | Passwords, `Authorization` and `Cookie` headers can never reach a log line |
-
-**Why breach checking beats complexity rules:** "must contain uppercase, a
-number and a symbol" reliably produces `Password1!` — it *reduces* real
-entropy by pushing everyone into the same predictable pattern. Checking
-against ~1 billion known-breached passwords catches far more real attacks,
-without the password ever leaving the server:
-
-```
-SHA-1("password") = 5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8
-                    └─5─┘
-send only "5BAA6"  →  HIBP returns ~800 candidate suffixes  →  match locally
-```
-
-HIBP sees a prefix matching hundreds of passwords — it cannot tell which one
-was ours. In testing, `password` came back with **52,372,427** hits.
+| **CSV export** | Leading `=`, `+`, `-`, `@` neutralised — customer-typed text cannot execute in Excel |
+| **Error tracking** | Sentry, optional, no PII, only unexpected errors, tagged with the request id the user saw |
 
 </details>
 
@@ -246,34 +205,42 @@ was ours. In testing, `password` came back with **52,372,427** hits.
 | API | **Fastify 5** | Real plugin encapsulation; faster than Express |
 | Language | **TypeScript** (strict, no `any`) | Catches errors before runtime |
 | Database | **PostgreSQL 16** | Relational data fits invoices naturally |
-| ORM | **Prisma 7** | Type-safe queries and versioned migrations |
-| Cache / queue | **Redis 7** | Revocable sessions and reliable job queues |
+| ORM | **Prisma 7** | Type-safe queries and versioned migrations; one raw query, for `date_trunc` |
+| Cache / queue | **Redis 7** + **BullMQ** | Revocable sessions and reliable jobs; bare cron loses failed jobs |
 | Hashing | **Argon2id** | Memory-hard; bcrypt is memory-cheap and truncates at 72 bytes |
-| Validation | **Zod** | Schema and TypeScript type from one definition |
-| Payments | **Stripe** | Webhooks with idempotency |
-| Jobs | **BullMQ** + node-cron | Retries and visibility; bare cron loses failed jobs |
-
-Full reasoning for each: [`docs/architecture-decisions.md`](docs/architecture-decisions.md)
+| Validation | **Zod** | Schema, TypeScript type and OpenAPI document from one definition |
+| Payments | **Stripe** | Hosted checkout, webhooks with idempotency |
+| PDF | **@react-pdf/renderer** | Flexbox layout; pdfkit is a pen and a table becomes arithmetic |
+| Frontend | **React 19 + Vite + Tailwind 4** | TanStack Query for server state; hand-written components, one SVG chart |
+| Tests | **bun:test**, **Vitest**, **Playwright** | Each at the boundary it can actually reach |
 
 ```
 backend/
-├── prisma/              schema + migrations
+├── prisma/              schema, migrations, seed and demo seed
 └── src/
-    ├── lib/             env · prisma · redis · errors · external clients
-    ├── plugins/         Fastify plugins (db, cache, errors, rate limit)
-    ├── validators/      Zod schemas
-    ├── services/        business logic — no HTTP knowledge
-    ├── routes/          URLs and middleware
-    └── types/           shared TypeScript types
+    ├── lib/             env · prisma · redis · money · ocr · csv · sie · stripe · mailer · sentry
+    ├── plugins/         Fastify plugins (db, cache, cors, errors, rate limit)
+    ├── middleware/      authenticate · authorize
+    ├── validators/      Zod schemas — also the source of the API docs
+    ├── routes/          URLs and which protections apply
+    ├── controllers/     HTTP in, HTTP out
+    ├── services/        business rules — no HTTP knowledge
+    ├── repositories/    queries only
+    ├── jobs/            BullMQ queues, workers, cron
+    ├── pdf/             the invoice document
+    ├── docs/            the OpenAPI document
+    └── demo/            the showcase dataset — the one file allowed to delete
+frontend/
+├── src/pages/           landing · login · admin/* · client/* · invoice detail
+├── src/components/      ui · BarChart · DemoLogins · RequireAuth · AppLayout
+├── src/lib/             api (silent refresh) · auth · types · sentry
+└── e2e/                 Playwright
 docs/
-└── architecture-decisions.md
+├── architecture-decisions.md   46 decisions, each with what was rejected
+├── deployment.md               Render + Neon + Vercel
+├── presentation.md             the ten-minute tour
+└── screenshots/
 ```
-
-| Script | Does |
-|---|---|
-| `bun run dev` | Dev server with watch mode |
-| `bun run start` | Run once |
-| `bun run typecheck` | `tsc --noEmit` |
 
 </details>
 
@@ -281,7 +248,7 @@ docs/
 
 <div align="center">
 
-**Devinder Singh** · Fullstack Developer (YH) student at Chas Academy, Stockholm
+**Devinder Singh** · Fullstack Developer Open Source (YH), Chas Academy, Stockholm
 
 Built as a study in doing financial software correctly.
 

@@ -71,6 +71,16 @@ model Invoice {
   currency String        @default("SEK")
   status   InvoiceStatus @default(DRAFT)
 
+  // A credit note (kreditfaktura) is an invoice with negative lines that
+  // cancels an earlier one. It is a document of its own, in the SAME number
+  // series — the law counts credit notes as invoices — and it points at what
+  // it credits. The original is never edited; its status becomes CREDITED.
+  type InvoiceType @default(INVOICE)
+
+  creditsInvoiceId String?
+  creditsInvoice   Invoice?  @relation("CreditNote", fields: [creditsInvoiceId], references: [id])
+  creditNotes      Invoice[] @relation("CreditNote")
+
   // Three totals, all in öre, all derived from the line items.
   // A Swedish invoice must state net, VAT and gross separately — showing
   // only the total is not legally sufficient.
@@ -78,7 +88,15 @@ model Invoice {
   vatTotalOre   Int @default(0) // the VAT itself
   grossTotalOre Int @default(0) // what the client actually pays
 
-  lateFeeOre Int @default(0) // förseningsavgift, also in öre
+  lateFeeOre Int @default(0) // dröjsmålsränta accrued so far, in öre
+
+  // Statutory reminder fee (påminnelseavgift), 60 kr by lag (1981:739). At
+  // most one per invoice, and only once a reminder has actually been sent —
+  // reminderSentAt records when. Separate from lateFeeOre because the two
+  // are different legal things: interest compensates for time, the fee for
+  // the cost of chasing.
+  reminderFeeOre Int       @default(0)
+  reminderSentAt DateTime?
 
   issueDate DateTime  @default(now()) // fakturadatum — required on the invoice
   dueDate   DateTime
@@ -117,6 +135,14 @@ enum InvoiceStatus {
   SENT
   PAID
   OVERDUE
+  /// Cancelled by a credit note. Terminal — nothing is owed and nothing can
+  /// happen to it again. The credit note itself carries the correction.
+  CREDITED
+}
+
+enum InvoiceType {
+  INVOICE
+  CREDIT_NOTE
 }
 
 model InvoiceItem {
@@ -172,6 +198,14 @@ enum TransactionType {
   INVOICE_CREATED
   PAYMENT_RECEIVED
   LATE_FEE_ADDED
+  /// Påminnelseavgift charged. Positive: the debt grew.
+  REMINDER_FEE_ADDED
+  /// A credit note cancelled this invoice. Negative, the invoice gross.
+  CREDIT_NOTE_ISSUED
+  /// Accrued interest written off — the invoice was credited. Negative.
+  LATE_FEE_WAIVED
+  /// Reminder fee written off — the invoice was credited. Negative.
+  REMINDER_FEE_WAIVED
   REFUND
   ADJUSTMENT
 }

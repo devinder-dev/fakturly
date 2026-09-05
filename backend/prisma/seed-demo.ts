@@ -21,7 +21,7 @@ async function main() {
   console.log('Demo dataset ready.\n')
   console.log(`  users     ${summary.users}`)
   console.log(`  clients   ${summary.clients}`)
-  console.log(`  invoices  ${summary.invoices}  (${summary.paid} paid, ${summary.overdue} overdue, ${summary.drafts} draft)`)
+  console.log(`  documents ${summary.invoices}  (${summary.paid} paid, ${summary.overdue} overdue, ${summary.reminded} reminded, ${summary.credited} credited, ${summary.drafts} draft)`)
   console.log('\nLog in as:')
   console.log(`  ${DEMO_ACCOUNTS.admin.label.padEnd(14)} ${DEMO_ACCOUNTS.admin.email}  /  ${DEMO_ACCOUNTS.admin.password}`)
   console.log(`  ${'Kund'.padEnd(14)} ${DEMO_ACCOUNTS.client.email}  /  ${DEMO_ACCOUNTS.client.password}`)

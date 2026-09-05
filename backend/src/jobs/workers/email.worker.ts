@@ -6,6 +6,7 @@
 
 import { Worker, type Job } from 'bullmq'
 import { prisma } from '../../lib/prisma.ts'
+import { totalDueOre } from '../../lib/money.ts'
 import { sendOverdueNoticeEmail, sendReminderEmail } from '../../services/email.service.ts'
 import { QueueName, bullConnection, type EmailJobData } from '../queues.ts'
 
@@ -18,6 +19,7 @@ export async function processEmailJob(job: Job<EmailJobData>) {
       status: true,
       grossTotalOre: true,
       lateFeeOre: true,
+      reminderFeeOre: true,
       currency: true,
       dueDate: true,
       client: { select: { name: true, email: true } }
@@ -35,15 +37,15 @@ export async function processEmailJob(job: Job<EmailJobData>) {
   // paid in the minutes between the two must not receive a demand for money
   // they have already sent — which is the kind of mistake that costs trust
   // rather than money.
-  if (invoice.status === 'PAID') {
-    return { skipped: 'already_paid' }
+  if (invoice.status === 'PAID' || invoice.status === 'CREDITED') {
+    return { skipped: invoice.status === 'PAID' ? 'already_paid' : 'credited' }
   }
 
   const common = {
     to: invoice.client.email,
     clientName: invoice.client.name,
     invoiceNumber: invoice.invoiceNumber,
-    amountOre: invoice.grossTotalOre + invoice.lateFeeOre,
+    amountOre: totalDueOre(invoice),
     currency: invoice.currency,
     dueDate: invoice.dueDate,
     invoiceId: invoice.id
@@ -52,7 +54,11 @@ export async function processEmailJob(job: Job<EmailJobData>) {
   const sent =
     job.data.kind === 'overdue-notice'
       ? await sendOverdueNoticeEmail({ ...common, lateFeeOre: invoice.lateFeeOre })
-      : await sendReminderEmail(common)
+      : await sendReminderEmail({
+          ...common,
+          lateFeeOre: invoice.lateFeeOre,
+          reminderFeeOre: invoice.reminderFeeOre
+        })
 
   // Throwing on failure is what makes BullMQ retry. The email service already
   // recorded the attempt in EmailLog, so a retry adds a second row — which is

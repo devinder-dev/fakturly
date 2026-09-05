@@ -17,6 +17,7 @@ import { ZodError } from 'zod'
 import { Prisma } from '../generated/prisma/client.ts'
 import { AppError, RateLimitError, isAppError } from '../lib/errors.ts'
 import { isProduction } from '../lib/env.ts'
+import { captureException } from '../lib/sentry.ts'
 
 /** One response shape for EVERY error, so the client never has to guess. */
 type ErrorResponse = {
@@ -141,6 +142,11 @@ async function errorHandlerPlugin(app: FastifyInstance) {
     // ── 5. Anything else = a bug we did not anticipate ──────────
     // Full stack trace in the log, nothing at all to the client.
     app.log.error({ err: error }, 'Unhandled error')
+
+    // And to Sentry, tagged with the request id the client was given, so a
+    // report of "error req-42" leads straight to the stack trace. Only this
+    // branch: a wrong password or a 404 is not an error to track.
+    captureException(error, { requestId: request.id, method: request.method, url: request.url })
 
     return send(
       reply,

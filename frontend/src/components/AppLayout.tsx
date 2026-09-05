@@ -49,6 +49,16 @@ export function AppLayout() {
               <NavLink to="/invoices" className={navLinkClass} end>
                 Fakturor
               </NavLink>
+              {user?.role === 'ADMIN' && (
+                <>
+                  <NavLink to="/reports" className={navLinkClass}>
+                    Rapporter
+                  </NavLink>
+                  <NavLink to="/audit" className={navLinkClass}>
+                    Logg
+                  </NavLink>
+                </>
+              )}
             </nav>
           </div>
 

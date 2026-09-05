@@ -150,6 +150,23 @@ export function formatOre(ore: number, currency = 'SEK'): string {
 }
 
 /**
+ * What a customer owes on an invoice right now.
+ *
+ * Three parts, each with its own legal basis and its own ledger rows:
+ * the invoice itself (gross, VAT included), interest under räntelagen,
+ * and the fixed reminder fee. Defined once so that the payment link, the
+ * PDF, the dashboard and the customer's screen can never disagree about
+ * the figure.
+ */
+export function totalDueOre(invoice: {
+  grossTotalOre: number
+  lateFeeOre: number
+  reminderFeeOre: number
+}): number {
+  return invoice.grossTotalOre + invoice.lateFeeOre + invoice.reminderFeeOre
+}
+
+/**
  * Late fee: a percentage of the invoice's gross total.
  *
  * Applied to gross rather than net because that is the amount actually

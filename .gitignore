@@ -39,3 +39,7 @@ backend/src/generated/
 
 # Vite build output
 frontend/dist/
+
+# Playwright output
+frontend/test-results/
+frontend/playwright-report/

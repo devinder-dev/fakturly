@@ -137,6 +137,89 @@ jobs:
         # broken bundle both fail here rather than at deploy.
         run: bun run build
 
+      - name: Unit tests
+        working-directory: frontend
+        # Vitest + Testing Library in jsdom: components and the money
+        # formatter, with the network faked and nothing else.
+        run: bun run test
+
+  e2e:
+    name: End to end in a browser
+    runs-on: ubuntu-latest
+    # The one job that runs everything at once: a real browser against the
+    # built frontend, against the real API, against real Postgres and Redis.
+    # It seeds the demo dataset first, because that is what the tests log
+    # into.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: devinder
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: fakturly
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U devinder -d fakturly"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://devinder:secret@localhost:5432/fakturly
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci_only_secret_that_is_at_least_32_characters_long
+      FRONTEND_URL: http://localhost:4173
+      CI: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install backend
+        working-directory: backend
+        run: |
+          bun install --frozen-lockfile
+          bunx prisma generate
+          bunx prisma migrate deploy
+
+      - name: Seed the demo dataset
+        working-directory: backend
+        run: bun run seed:demo
+
+      - name: Install frontend and browsers
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps chromium
+
+      - name: Run Playwright
+        working-directory: frontend
+        # playwright.config.ts starts the API (demo mode, port 3100) and the
+        # built frontend (port 4173) itself.
+        run: bun run test:e2e
+
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report
+          retention-days: 7
+
   docker:
     name: API image builds
     runs-on: ubuntu-latest

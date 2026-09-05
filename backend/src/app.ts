@@ -15,7 +15,10 @@ import authRoutes from './routes/auth.routes.ts'
 import clientRoutes from './routes/clients.routes.ts'
 import invoiceRoutes from './routes/invoices.routes.ts'
 import dashboardRoutes from './routes/dashboard.routes.ts'
+import reportRoutes from './routes/reports.routes.ts'
+import auditLogRoutes from './routes/auditLog.routes.ts'
 import demoRoutes from './routes/demo.routes.ts'
+import docsRoutes from './routes/docs.routes.ts'
 import webhookRoutes from './routes/webhooks.routes.ts'
 
 // buildApp creates a fresh app every time it is called.
@@ -121,8 +124,17 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Admin dashboard — aggregates over the ledger.
   await app.register(dashboardRoutes)
 
+  // Reports: aging, VAT, SIE export. Admin only.
+  await app.register(reportRoutes)
+
+  // The audit log, readable. Admin only.
+  await app.register(auditLogRoutes)
+
   // Demo accounts. The plugin registers nothing unless DEMO_MODE is on.
   await app.register(demoRoutes)
+
+  // API reference: /docs and /docs/openapi.json.
+  await app.register(docsRoutes)
 
   // Webhooks. Registered LAST and inside its own scope, because it overrides
   // the JSON body parser to keep the raw bytes for signature verification.

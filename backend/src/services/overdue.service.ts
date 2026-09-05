@@ -41,6 +41,10 @@ export async function runOverdueCheck(now: Date = new Date()): Promise<OverdueRu
   // a PAID one is settled.
   const candidates = await prisma.invoice.findMany({
     where: {
+      // A credit note is also SENT and also has a due date — its issue
+      // date. Without this filter, every credit note would turn OVERDUE
+      // the night after it was issued and start accruing negative interest.
+      type: 'INVOICE',
       status: { in: ['SENT', 'OVERDUE'] },
       dueDate: { lt: now }
     },
@@ -135,7 +139,7 @@ async function applyOverdue(params: {
     // The status guard is in the WHERE clause, so an invoice paid between the
     // query above and this write is not marked overdue after the fact.
     const updated = await tx.invoice.updateMany({
-      where: { id: params.invoiceId, status: { in: ['SENT', 'OVERDUE'] } },
+      where: { id: params.invoiceId, type: 'INVOICE', status: { in: ['SENT', 'OVERDUE'] } },
       data: { status: 'OVERDUE', lateFeeOre: params.newLateFeeOre }
     })
 

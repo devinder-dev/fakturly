@@ -14,7 +14,13 @@
 // gap in the log. We choose availability here and shout loudly in the
 // application log instead.
 
-import { createAuditEntry, type AuditEntry } from '../repositories/auditLog.repository.ts'
+import {
+  createAuditEntry,
+  findAuditEntries,
+  type AuditEntry,
+  type AuditLogFilter,
+  type AuditLogPage
+} from '../repositories/auditLog.repository.ts'
 
 /**
  * Every action we record. A closed set rather than free strings, so a typo
@@ -42,7 +48,10 @@ export const AuditAction = {
   /** No acting user — Stripe told us, not a person. */
   PAYMENT_RECEIVED: 'PAYMENT_RECEIVED',
   /** No acting user — the scheduler, not a person. */
-  INVOICE_OVERDUE: 'INVOICE_OVERDUE'
+  INVOICE_OVERDUE: 'INVOICE_OVERDUE',
+  CREDIT_NOTE_ISSUED: 'CREDIT_NOTE_ISSUED',
+  REMINDER_SENT: 'REMINDER_SENT',
+  REPORT_EXPORTED: 'REPORT_EXPORTED'
 } as const
 
 export type AuditActionType = (typeof AuditAction)[keyof typeof AuditAction]
@@ -80,4 +89,15 @@ export async function record(input: AuditInput): Promise<void> {
       error: error instanceof Error ? error.message : String(error)
     })
   }
+}
+
+/**
+ * Reads a page of the log. Admin only — enforced on the route.
+ *
+ * Deliberately thin. The one thing worth saying: the log is read through the
+ * same repository that writes it, and that repository has no update or
+ * delete. Reading it does not change it.
+ */
+export async function listAuditEntries(filter: AuditLogFilter): Promise<AuditLogPage> {
+  return findAuditEntries(filter)
 }

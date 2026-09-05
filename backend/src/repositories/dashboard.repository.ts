@@ -31,13 +31,18 @@ export type AmountWithCount = {
  */
 export async function sumOutstanding(): Promise<AmountWithCount> {
   const result = await prisma.invoice.aggregate({
-    where: { status: { in: ['SENT', 'OVERDUE'] } },
-    _sum: { grossTotalOre: true, lateFeeOre: true },
+    // type: INVOICE — a credit note is SENT too, with a negative gross, and
+    // would silently shrink the figure.
+    where: { type: 'INVOICE', status: { in: ['SENT', 'OVERDUE'] } },
+    _sum: { grossTotalOre: true, lateFeeOre: true, reminderFeeOre: true },
     _count: true
   })
 
   return {
-    amountOre: (result._sum.grossTotalOre ?? 0) + (result._sum.lateFeeOre ?? 0),
+    amountOre:
+      (result._sum.grossTotalOre ?? 0) +
+      (result._sum.lateFeeOre ?? 0) +
+      (result._sum.reminderFeeOre ?? 0),
     count: result._count
   }
 }
@@ -45,13 +50,16 @@ export async function sumOutstanding(): Promise<AmountWithCount> {
 /** The subset of outstanding that is past its due date. */
 export async function sumOverdue(): Promise<AmountWithCount> {
   const result = await prisma.invoice.aggregate({
-    where: { status: 'OVERDUE' },
-    _sum: { grossTotalOre: true, lateFeeOre: true },
+    where: { type: 'INVOICE', status: 'OVERDUE' },
+    _sum: { grossTotalOre: true, lateFeeOre: true, reminderFeeOre: true },
     _count: true
   })
 
   return {
-    amountOre: (result._sum.grossTotalOre ?? 0) + (result._sum.lateFeeOre ?? 0),
+    amountOre:
+      (result._sum.grossTotalOre ?? 0) +
+      (result._sum.lateFeeOre ?? 0) +
+      (result._sum.reminderFeeOre ?? 0),
     count: result._count
   }
 }
@@ -135,8 +143,8 @@ export type ClientBalance = {
 export async function topClientsByOutstanding(limit: number): Promise<ClientBalance[]> {
   const groups = await prisma.invoice.groupBy({
     by: ['clientId'],
-    where: { status: { in: ['SENT', 'OVERDUE'] } },
-    _sum: { grossTotalOre: true, lateFeeOre: true },
+    where: { type: 'INVOICE', status: { in: ['SENT', 'OVERDUE'] } },
+    _sum: { grossTotalOre: true, lateFeeOre: true, reminderFeeOre: true },
     _count: { _all: true },
     orderBy: { _sum: { grossTotalOre: 'desc' } },
     take: limit
@@ -153,7 +161,10 @@ export async function topClientsByOutstanding(limit: number): Promise<ClientBala
   return groups.map((group) => ({
     clientId: group.clientId,
     name: nameById.get(group.clientId) ?? '—',
-    outstandingOre: (group._sum.grossTotalOre ?? 0) + (group._sum.lateFeeOre ?? 0),
+    outstandingOre:
+      (group._sum.grossTotalOre ?? 0) +
+      (group._sum.lateFeeOre ?? 0) +
+      (group._sum.reminderFeeOre ?? 0),
     invoiceCount: group._count._all
   }))
 }

@@ -31,6 +31,7 @@ import * as invoiceService from '../services/invoice.service.ts'
 import * as invoiceRepository from '../repositories/invoice.repository.ts'
 import * as clientRepository from '../repositories/client.repository.ts'
 import { runOverdueCheck } from '../services/overdue.service.ts'
+import { REMINDER_FEE_ORE } from '../lib/money.ts'
 
 // ─────────────────────────────────────────────────────────────
 // The accounts a visitor may log in with
@@ -122,7 +123,11 @@ type Scenario = {
   outcome:
     | { kind: 'draft' }
     | { kind: 'unpaid' }
+    /** Unpaid, and a reminder with the statutory fee was sent. */
+    | { kind: 'reminded'; daysAfterIssue: number }
     | { kind: 'paid'; daysAfterIssue: number }
+    /** Sent, then cancelled by a credit note — a wrong amount, say. */
+    | { kind: 'credited'; daysAfterIssue: number }
 }
 
 const kr = (kronor: number) => kronor * 100
@@ -142,8 +147,9 @@ const SCENARIOS: Scenario[] = [
   { client: 0, daysAgo: 98, items: [{ description: 'Projektledning, etapp 3', quantity: 48, unitPriceOre: kr(950), vatRate: VatRate.STANDARD }], outcome: { kind: 'paid', daysAfterIssue: 30 } },
   { client: 2, daysAgo: 84, items: [{ description: 'Tvistelösning, förberedelse', quantity: 9, unitPriceOre: kr(2_600), vatRate: VatRate.STANDARD }], outcome: { kind: 'paid', daysAfterIssue: 45 } },
   { client: 1, daysAgo: 70, items: [{ description: 'Frukostleverans, kvartal', quantity: 60, unitPriceOre: kr(89), vatRate: VatRate.REDUCED_12 }], outcome: { kind: 'paid', daysAfterIssue: 14 } },
+  { client: 2, daysAgo: 64, items: [{ description: 'Rådgivning, felaktigt antal timmar', quantity: 22, unitPriceOre: kr(2_600), vatRate: VatRate.STANDARD }], outcome: { kind: 'credited', daysAfterIssue: 4 } },
   // ── Recent: the interesting ones ────────────────────────────
-  { client: 3, daysAgo: 71, items: [{ description: 'Serviceavtal, år 1', quantity: 1, unitPriceOre: kr(12_000), vatRate: VatRate.STANDARD }], outcome: { kind: 'unpaid' } },      // 41 days overdue
+  { client: 3, daysAgo: 71, items: [{ description: 'Serviceavtal, år 1', quantity: 1, unitPriceOre: kr(12_000), vatRate: VatRate.STANDARD }], outcome: { kind: 'reminded', daysAfterIssue: 45 } }, // 41 days overdue, reminded
   { client: 4, daysAgo: 55, items: [{ description: 'Illustrationer, 12 st', quantity: 12, unitPriceOre: kr(1_800), vatRate: VatRate.STANDARD }], outcome: { kind: 'unpaid' } },  // 25 days overdue
   { client: 0, daysAgo: 42, items: [{ description: 'Projektledning, etapp 4', quantity: 36, unitPriceOre: kr(950), vatRate: VatRate.STANDARD }, { description: 'Utbildning arbetsmiljö', quantity: 1, unitPriceOre: kr(8_000), vatRate: VatRate.ZERO }], outcome: { kind: 'unpaid' } }, // 12 days overdue
   { client: 2, daysAgo: 20, items: [{ description: 'Löpande rådgivning', quantity: 4, unitPriceOre: kr(2_600), vatRate: VatRate.STANDARD }], outcome: { kind: 'unpaid' } },       // due in 10 days
@@ -155,10 +161,13 @@ const SCENARIOS: Scenario[] = [
 export type DemoSummary = {
   users: number
   clients: number
+  /** Documents in the number series, credit notes included. */
   invoices: number
   paid: number
   overdue: number
   drafts: number
+  credited: number
+  reminded: number
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -202,7 +211,7 @@ export async function resetDemoData(now: Date = new Date()): Promise<DemoSummary
   }
 
   // ── Invoices, in the order they happened ─────────────────────
-  const counts = { paid: 0, overdue: 0, drafts: 0 }
+  const counts = { paid: 0, overdue: 0, drafts: 0, credited: 0, reminded: 0 }
 
   // Oldest first, so invoice numbers increase with the dates. The series
   // would be legal either way, but a dashboard where 2026-0003 predates
@@ -238,6 +247,38 @@ export async function resetDemoData(now: Date = new Date()): Promise<DemoSummary
       where: { invoiceId: invoice.id, type: 'INVOICE_CREATED' },
       data: { createdAt: issuedAt }
     })
+
+    if (scenario.outcome.kind === 'credited') {
+      const creditedAt = new Date(issuedAt.getTime() + scenario.outcome.daysAfterIssue * DAY_MS)
+      const result = await invoiceService.issueCreditNote(invoice.id, admin.id)
+      await prisma.invoice.update({
+        where: { id: result.creditNote.id },
+        data: { issueDate: creditedAt, sentAt: creditedAt, dueDate: creditedAt, createdAt: creditedAt }
+      })
+      await prisma.transaction.updateMany({
+        where: { invoiceId: invoice.id, type: 'CREDIT_NOTE_ISSUED' },
+        data: { createdAt: creditedAt }
+      })
+      counts.credited += 1
+      continue
+    }
+
+    if (scenario.outcome.kind === 'reminded') {
+      const remindedAt = new Date(issuedAt.getTime() + scenario.outcome.daysAfterIssue * DAY_MS)
+      // Interest first, as the real timeline would have it, then the fee.
+      await runOverdueCheck(remindedAt)
+      const charged = await invoiceRepository.chargeReminderFee(invoice.id, REMINDER_FEE_ORE, remindedAt)
+      if (!charged) throw new Error(`Demo: could not charge reminder fee on ${invoice.invoiceNumber}`)
+      await prisma.transaction.updateMany({
+        where: { invoiceId: invoice.id, type: 'REMINDER_FEE_ADDED' },
+        data: { createdAt: remindedAt }
+      })
+      await prisma.emailLog.create({
+        data: { invoiceId: invoice.id, recipient: CLIENTS[scenario.client]!.email, type: 'REMINDER', providerMessageId: 'demo', sentAt: remindedAt }
+      })
+      counts.reminded += 1
+      continue
+    }
 
     if (scenario.outcome.kind === 'paid') {
       const paidAt = new Date(issuedAt.getTime() + scenario.outcome.daysAfterIssue * DAY_MS)
@@ -286,7 +327,7 @@ export async function resetDemoData(now: Date = new Date()): Promise<DemoSummary
   return {
     users: 1 + CLIENTS.length,
     clients: CLIENTS.length,
-    invoices: SCENARIOS.length,
+    invoices: SCENARIOS.length + counts.credited, // each credit note is a document too
     ...counts
   }
 }

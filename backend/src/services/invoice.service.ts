@@ -3,11 +3,13 @@
 // Every money figure on an invoice is calculated here from the submitted
 // line items. Nothing the caller sends is trusted as a total.
 
-import { calculateLine, sumLines } from '../lib/money.ts'
+import { calculateLine, sumLines, REMINDER_FEE_ORE } from '../lib/money.ts'
 import { allocateInvoiceNumber } from '../repositories/invoiceNumber.repository.ts'
 import * as invoiceRepository from '../repositories/invoice.repository.ts'
 import * as clientRepository from '../repositories/client.repository.ts'
 import { record, AuditAction, AuditResource } from './audit.service.ts'
+import { sendInvoiceEmail } from './email.service.ts'
+import { getEmailQueue } from '../jobs/queues.ts'
 import { NotFoundError, BusinessRuleError } from '../lib/errors.ts'
 import type { InvoiceRecord } from '../repositories/invoice.repository.ts'
 import type { CreateInvoiceInput, InvoiceListQuery } from '../validators/invoice.validator.ts'
@@ -162,6 +164,7 @@ export async function listInvoicesForCaller(
       limit: query.limit,
       offset: query.offset,
       status: query.status,
+      type: query.type,
       clientId: query.clientId
     })
   }
@@ -178,6 +181,7 @@ export async function listInvoicesForCaller(
     limit: query.limit,
     offset: query.offset,
     status: query.status,
+    type: query.type,
     // Deliberately ignores query.clientId. A client asking for someone else's
     // invoices is silently scoped back to their own rather than refused —
     // refusing would confirm the other client id is real.
@@ -192,10 +196,16 @@ export async function listInvoicesForCaller(
 /**
  * Which moves are legal.
  *
- * DRAFT   -> SENT            the invoice becomes a financial document
- * SENT    -> PAID | OVERDUE
- * OVERDUE -> PAID            paying late is still paying
- * PAID    -> nothing         terminal
+ * DRAFT    -> SENT                 the invoice becomes a financial document
+ * SENT     -> PAID | OVERDUE | CREDITED
+ * OVERDUE  -> PAID | CREDITED      paying late is still paying
+ * PAID     -> nothing              terminal
+ * CREDITED -> nothing              terminal — the credit note carries on
+ *
+ * Note what is NOT here: PAID -> CREDITED. Crediting a paid invoice means
+ * money must go back to the customer, which is a refund flow with its own
+ * ledger rows and its own Stripe call. Until that exists, a paid invoice
+ * cannot be credited, and the transition table says so.
  *
  * Everything absent from this table is refused. Encoding it as data rather
  * than a chain of if-statements means the rules can be read at a glance, and
@@ -203,9 +213,10 @@ export async function listInvoicesForCaller(
  */
 const ALLOWED_TRANSITIONS: Record<InvoiceStatus, readonly InvoiceStatus[]> = {
   DRAFT: ['SENT'],
-  SENT: ['PAID', 'OVERDUE'],
-  OVERDUE: ['PAID'],
-  PAID: []
+  SENT: ['PAID', 'OVERDUE', 'CREDITED'],
+  OVERDUE: ['PAID', 'CREDITED'],
+  PAID: [],
+  CREDITED: []
 }
 
 export function canTransition(from: InvoiceStatus, to: InvoiceStatus): boolean {
@@ -254,7 +265,197 @@ export async function sendInvoice(
     userAgent: context.userAgent
   })
 
+  // The customer is told. After the status change and outside its
+  // transaction: the invoice IS sent whether or not the mail server is up,
+  // and the email service records the attempt either way.
+  const client = await clientRepository.findClientById(updated.clientId)
+  if (client) {
+    await sendInvoiceEmail({
+      to: client.email,
+      clientName: client.name,
+      invoiceNumber: updated.invoiceNumber,
+      grossTotalOre: updated.grossTotalOre,
+      currency: updated.currency,
+      dueDate: updated.dueDate,
+      invoiceId: updated.id
+    })
+  }
+
   return updated
+}
+
+// ─────────────────────────────────────────────────────────────
+// Credit notes
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Issues a credit note (kreditfaktura) that cancels an invoice in full.
+ *
+ * WHY NOT JUST EDIT OR DELETE THE INVOICE: once sent, an invoice is a
+ * financial record with a number in the legally-required series and a copy in
+ * the customer's bookkeeping. Bokföringslagen does not allow it to change.
+ * The only lawful correction is a NEW document that says "minus this much",
+ * references the original, and takes the next number in the same series.
+ *
+ * The credit note mirrors the original line by line with negated quantities,
+ * so its totals are exactly minus the original's — the same arithmetic run
+ * on the same inputs, which is why roundOre rounds half away from zero
+ * (symmetrically) rather than half up.
+ *
+ * Only SENT or OVERDUE invoices can be credited here. A PAID one needs a
+ * refund flow that does not exist yet; the transition table refuses it.
+ *
+ * Partial credit notes (crediting one line, or a discount) are a real thing
+ * and a natural extension. Full credit first, because it has no ambiguity
+ * about what happens to interest and fees: everything is written off.
+ */
+export async function issueCreditNote(
+  originalId: string,
+  actingAdminId: string,
+  context: RequestContext = {}
+): Promise<{ creditNote: InvoiceRecord; original: InvoiceRecord }> {
+  const original = await invoiceRepository.findInvoiceById(originalId)
+  if (!original) {
+    throw new NotFoundError('Fakturan')
+  }
+
+  if (original.type === 'CREDIT_NOTE') {
+    throw new BusinessRuleError('En kreditfaktura kan inte krediteras')
+  }
+
+  if (original.status === 'PAID') {
+    throw new BusinessRuleError(
+      'En betald faktura krediteras genom återbetalning, vilket inte stöds ännu'
+    )
+  }
+
+  if (!canTransition(original.status, 'CREDITED')) {
+    throw new BusinessRuleError(`En faktura med status ${original.status} kan inte krediteras`)
+  }
+
+  // Mirror image. Same descriptions, same prices, same VAT rates — the sign
+  // lives on the quantity, and every derived figure follows from it.
+  const mirrored = original.items.map((item) => {
+    const line = calculateLine({
+      quantity: -item.quantity,
+      unitPriceOre: item.unitPriceOre,
+      vatRate: item.vatRate
+    })
+    return {
+      description: item.description,
+      quantity: -item.quantity,
+      unitPriceOre: item.unitPriceOre,
+      vatRate: item.vatRate,
+      netOre: line.netOre,
+      vatOre: line.vatOre,
+      grossOre: line.grossOre,
+      position: item.position
+    }
+  })
+  const totals = sumLines(mirrored)
+
+  // Same series as invoices. The law counts a credit note as an invoice, and
+  // a separate numbering would leave a gap in the "real" series that someone
+  // would have to explain.
+  const creditNoteNumber = await allocateInvoiceNumber(new Date().getFullYear())
+
+  const result = await invoiceRepository.createCreditNote({
+    originalId,
+    creditNoteNumber,
+    clientId: original.clientId,
+    currency: original.currency,
+    issuedAt: new Date(),
+    netTotalOre: totals.netTotalOre,
+    vatTotalOre: totals.vatTotalOre,
+    grossTotalOre: totals.grossTotalOre,
+    items: mirrored
+  })
+
+  if (!result) {
+    throw new BusinessRuleError('Fakturan ändrades av någon annan. Försök igen.')
+  }
+
+  await record({
+    action: AuditAction.CREDIT_NOTE_ISSUED,
+    resource: AuditResource.INVOICE,
+    userId: actingAdminId,
+    resourceId: result.creditNote.id,
+    ipAddress: context.ip,
+    userAgent: context.userAgent
+  })
+
+  return result
+}
+
+// ─────────────────────────────────────────────────────────────
+// Reminders
+// ─────────────────────────────────────────────────────────────
+
+export type ReminderOutcome = {
+  invoice: InvoiceRecord
+  /** True when this reminder charged the statutory fee. */
+  feeCharged: boolean
+}
+
+/**
+ * Sends a payment reminder and, the first time, charges the statutory fee.
+ *
+ * Lag (1981:739) om ersättning för inkassokostnader allows ONE reminder fee
+ * of 60 kr per debt, and only if the invoice stated in advance that it would
+ * be charged — ours does, in the terms printed on every PDF. A second or
+ * third reminder is free: the email goes out, the fee does not repeat.
+ *
+ * The fee and its ledger row are written atomically, with the "once" rule
+ * in the WHERE clause. The email is queued afterwards, outside the
+ * transaction, with retries: a mail outage must not lose the fee, and a fee
+ * must not be charged twice because a retry re-ran the whole thing.
+ */
+export async function sendReminder(
+  invoiceId: string,
+  actingAdminId: string,
+  context: RequestContext = {}
+): Promise<ReminderOutcome> {
+  const invoice = await invoiceRepository.findInvoiceById(invoiceId)
+  if (!invoice) {
+    throw new NotFoundError('Fakturan')
+  }
+
+  if (invoice.type === 'CREDIT_NOTE') {
+    throw new BusinessRuleError('En kreditfaktura kan inte påminnas')
+  }
+
+  if (invoice.status !== 'SENT' && invoice.status !== 'OVERDUE') {
+    throw new BusinessRuleError(`En faktura med status ${invoice.status} kan inte påminnas`)
+  }
+
+  const now = new Date()
+  let feeCharged = false
+  let updated = await invoiceRepository.chargeReminderFee(invoiceId, REMINDER_FEE_ORE, now)
+
+  if (updated) {
+    feeCharged = true
+  } else {
+    // Already charged once. Just record that another reminder went out.
+    await invoiceRepository.markReminderSent(invoiceId, now)
+    updated = await invoiceRepository.findInvoiceById(invoiceId)
+    if (!updated) throw new NotFoundError('Fakturan')
+  }
+
+  await record({
+    action: AuditAction.REMINDER_SENT,
+    resource: AuditResource.INVOICE,
+    userId: actingAdminId,
+    resourceId: invoiceId,
+    ipAddress: context.ip,
+    userAgent: context.userAgent
+  })
+
+  // Through the queue, so a mail provider hiccup is retried rather than
+  // lost. The worker re-reads the invoice at send time and skips it if the
+  // customer paid in the meantime.
+  await getEmailQueue().add('payment-reminder', { kind: 'payment-reminder', invoiceId })
+
+  return { invoice: updated, feeCharged }
 }
 
 /**

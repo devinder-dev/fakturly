@@ -14,6 +14,7 @@ import * as webhookEventRepository from '../repositories/webhookEvent.repository
 import { record, AuditAction, AuditResource } from './audit.service.ts'
 import { sendPaymentConfirmationEmail } from './email.service.ts'
 import { env } from '../lib/env.ts'
+import { totalDueOre } from '../lib/money.ts'
 import { NotFoundError, BusinessRuleError } from '../lib/errors.ts'
 import type { RequestContext } from './auth.service.ts'
 
@@ -44,6 +45,10 @@ export async function createPaymentLink(
     throw new NotFoundError('Fakturan')
   }
 
+  if (invoice.type === 'CREDIT_NOTE') {
+    throw new BusinessRuleError('En kreditfaktura kan inte betalas')
+  }
+
   if (invoice.status === 'DRAFT') {
     throw new BusinessRuleError('Fakturan måste skickas innan den kan betalas')
   }
@@ -52,15 +57,18 @@ export async function createPaymentLink(
     throw new BusinessRuleError('Fakturan är redan betald')
   }
 
+  if (invoice.status === 'CREDITED') {
+    throw new BusinessRuleError('Fakturan är krediterad och kan inte betalas')
+  }
+
   const client = await clientRepository.findClientById(invoice.clientId)
   if (!client) {
     throw new NotFoundError('Kunden')
   }
 
-  // The amount charged is the invoice gross plus any late fee that has
-  // accrued — what is actually outstanding today, not what it was when the
-  // invoice was written.
-  const amountOre = invoice.grossTotalOre + invoice.lateFeeOre
+  // What is actually outstanding today — gross, accrued interest and any
+  // reminder fee — not what the invoice said when it was written.
+  const amountOre = totalDueOre(invoice)
 
   const session = await createCheckoutSession({
     invoiceId: invoice.id,
@@ -151,8 +159,8 @@ export async function handleStripeEvent(event: StripeEvent): Promise<WebhookOutc
     return { handled: false, reason: 'unknown_invoice' }
   }
 
-  const amountOre = session.amount_total ?? invoice.grossTotalOre + invoice.lateFeeOre
-  const expectedOre = invoice.grossTotalOre + invoice.lateFeeOre
+  const expectedOre = totalDueOre(invoice)
+  const amountOre = session.amount_total ?? expectedOre
 
   // A mismatch does not stop us recording the payment — the money genuinely
   // arrived, and refusing to record it would leave the ledger further from
