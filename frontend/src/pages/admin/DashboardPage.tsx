@@ -33,7 +33,7 @@ export function DashboardPage() {
 
   return (
     <>
-      <PageHeader title="Översikt" />
+      <PageHeader title="Översikt" subtitle="Utestående, förfallet och de senaste tolv månaderna, direkt ur huvudboken." />
 
       {/* ── Stat tiles ──────────────────────────────────────── */}
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

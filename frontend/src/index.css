@@ -1,20 +1,37 @@
-/* index.css — Tailwind and the few design tokens the app uses.
+/* index.css — Tailwind and the design tokens the app is built from.
  *
  * Tailwind v4 configures itself in CSS rather than a JS config file. @theme
- * defines custom values that become utility classes automatically.
+ * defines custom values that become utility classes automatically:
+ * --color-brand-600 becomes bg-brand-600, text-brand-600 and so on.
  */
 
 @import 'tailwindcss';
 
 @theme {
-  /* One accent colour, used for primary actions and nothing else. Having a
-   * single deliberate colour is what stops an app looking like a component
-   * library sampler. */
-  --color-brand-50: oklch(0.97 0.02 250);
-  --color-brand-100: oklch(0.93 0.04 250);
-  --color-brand-500: oklch(0.55 0.18 250);
-  --color-brand-600: oklch(0.48 0.18 250);
-  --color-brand-700: oklch(0.41 0.16 250);
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* The accent. One hue, used for primary actions, links and the active
+   * navigation item — and nothing else. A single deliberate colour is what
+   * stops an app looking like a component-library sampler. */
+  --color-brand-50: oklch(0.97 0.02 255);
+  --color-brand-100: oklch(0.93 0.05 255);
+  --color-brand-200: oklch(0.87 0.09 255);
+  --color-brand-400: oklch(0.66 0.17 255);
+  --color-brand-500: oklch(0.57 0.2 255);
+  --color-brand-600: oklch(0.5 0.2 255);
+  --color-brand-700: oklch(0.43 0.17 255);
+
+  /* "Ink": the near-black the dark surfaces are made of. A touch of blue in
+   * it rather than pure black, so the dark hero and the sidebar read as one
+   * material with the accent. */
+  --color-ink-950: oklch(0.17 0.03 260);
+  --color-ink-900: oklch(0.22 0.03 260);
+  --color-ink-800: oklch(0.28 0.03 260);
+  --color-ink-700: oklch(0.36 0.03 260);
+
+  /* Money that arrived. Reserved for that one meaning. */
+  --color-mint-400: oklch(0.8 0.15 165);
+  --color-mint-600: oklch(0.6 0.14 165);
 }
 
 /* Tabular figures for money.
@@ -25,4 +42,64 @@
  * most in an invoicing app. */
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* ── Landing page motion ──────────────────────────────────────
+ *
+ * Two animations only, both subtle. The ledger in the hero writes its rows
+ * in one by one, because the story of the product is "every event is a
+ * row, and they sum to zero". Nothing loops forever; nothing moves after
+ * the first few seconds. Motion that never stops is a distraction on a
+ * page someone is trying to read.
+ */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.rise {
+  animation: rise 0.6s ease-out both;
+}
+
+/* Ledger rows appear in sequence; the delay is set inline per row. */
+.ledger-row {
+  animation: rise 0.5s ease-out both;
+}
+
+/* People who asked their OS for less motion get none. */
+@media (prefers-reduced-motion: reduce) {
+  .rise, .ledger-row { animation: none; }
+}
+
+/* A soft radial glow behind the hero. Pure CSS, no image to load.
+ *
+ * background-image, NOT the `background` shorthand: the shorthand resets
+ * background-color to transparent, and because this rule sits outside
+ * Tailwind's layers it outranks the bg-ink-950 utility on the same element.
+ * The first version of this rule turned the hero white with white text. */
+.hero-glow {
+  background-color: var(--color-ink-950);
+  background-image:
+    radial-gradient(60rem 30rem at 20% -10%, oklch(0.5 0.2 255 / 0.45), transparent 60%),
+    radial-gradient(40rem 24rem at 90% 10%, oklch(0.6 0.14 165 / 0.25), transparent 60%);
+}
+
+/* Fine grid behind dark sections — the "engineering paper" texture. */
+.grid-paper {
+  background-color: var(--color-ink-950);
+  background-image:
+    linear-gradient(oklch(1 0 0 / 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(1 0 0 / 0.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Both on one element: the glow layers on top of the grid. Sizes are
+ * per-layer, so the grid keeps its 32px tile and the glows stretch. */
+.hero-glow.grid-paper {
+  background-image:
+    radial-gradient(60rem 30rem at 20% -10%, oklch(0.5 0.2 255 / 0.45), transparent 60%),
+    radial-gradient(40rem 24rem at 90% 10%, oklch(0.6 0.14 165 / 0.25), transparent 60%),
+    linear-gradient(oklch(1 0 0 / 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(1 0 0 / 0.04) 1px, transparent 1px);
+  background-size: auto, auto, 32px 32px, 32px 32px;
 }

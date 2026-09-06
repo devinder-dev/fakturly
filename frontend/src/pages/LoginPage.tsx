@@ -1,12 +1,17 @@
-// LoginPage.tsx
+// LoginPage.tsx — split layout: the form on one side, the product on the other.
+//
+// The dark panel is not decoration for its own sake. Someone who lands here
+// from a link has not seen the landing page, and the panel tells them in two
+// sentences what they are logging into.
 
 import { useState, type FormEvent } from 'react'
 import { Link, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth.tsx'
 import { ApiError } from '../lib/api.ts'
-import { Button, Field, Card } from '../components/ui.tsx'
+import { Button, Field } from '../components/ui.tsx'
 import { FullPageSpinner } from '../components/RequireAuth.tsx'
 import { DemoLogins } from '../components/DemoLogins.tsx'
+import { Logo } from '../components/Logo.tsx'
 
 export function LoginPage() {
   const { user, isLoading, login } = useAuth()
@@ -59,15 +64,35 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 text-center">
-          <h1 className="text-2xl font-semibold text-slate-900">Fakturly</h1>
-          <p className="mt-1 text-sm text-slate-500">Logga in för att fortsätta</p>
+    <div className="grid min-h-screen font-sans antialiased lg:grid-cols-[1fr_1fr]">
+      {/* ── Brand panel ─────────────────────────────────────── */}
+      <aside className="hero-glow grid-paper relative hidden flex-col justify-between bg-ink-950 p-12 text-white lg:flex">
+        <Link to="/"><Logo tone="light" /></Link>
+        <div>
+          <h2 className="max-w-md text-3xl font-bold leading-tight tracking-tight">
+            Fakturering byggd som ett finansiellt system.
+          </h2>
+          <p className="mt-4 max-w-md text-slate-400">
+            Pengar i heltal. Skickade fakturor som aldrig ändras. En huvudbok där varje öre går att
+            förklara.
+          </p>
         </div>
+        <p className="text-xs text-slate-500">
+          Ett studieprojekt av Devinder Singh · Chas Academy Stockholm
+        </p>
+      </aside>
 
-        <Card className="p-6">
-          <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+      {/* ── Form ────────────────────────────────────────────── */}
+      <main className="flex items-center justify-center bg-white px-6 py-16">
+        <div className="w-full max-w-sm">
+          <Link to="/" className="mb-10 inline-block lg:hidden"><Logo /></Link>
+
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Logga in</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Konton skapas av administratören. Du får en inbjudan via e-post.
+          </p>
+
+          <form onSubmit={handleSubmit} className="mt-8 space-y-4" noValidate>
             <Field
               label="E-postadress"
               name="email"
@@ -90,7 +115,7 @@ export function LoginPage() {
             />
 
             {error && (
-              <div className="rounded-md bg-red-50 p-3" role="alert">
+              <div className="rounded-lg bg-red-50 p-3" role="alert">
                 <p className="text-sm text-red-800">{error}</p>
               </div>
             )}
@@ -99,21 +124,19 @@ export function LoginPage() {
               Logga in
             </Button>
           </form>
-        </Card>
 
-        <p className="mt-6 text-center text-xs text-slate-500">
-          Konton skapas av administratören. Du får en inbjudan via e-post.
-        </p>
+          {/* Renders nothing unless the API is in demo mode. */}
+          <div className="mt-10 border-t border-slate-100 pt-8">
+            <DemoLogins />
+          </div>
 
-        {/* Renders nothing unless the API is in demo mode. */}
-        <DemoLogins className="mt-8" />
-
-        <p className="mt-6 text-center text-xs">
-          <Link to="/" className="text-slate-500 hover:text-slate-900 hover:underline">
-            Om Fakturly
-          </Link>
-        </p>
-      </div>
+          <p className="mt-10 text-xs">
+            <Link to="/" className="text-slate-500 hover:text-slate-900 hover:underline">
+              ← Om Fakturly
+            </Link>
+          </p>
+        </div>
+      </main>
     </div>
   )
 }

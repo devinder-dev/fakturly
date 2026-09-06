@@ -27,7 +27,7 @@ export function ReportsPage() {
 
   return (
     <>
-      <PageHeader title="Rapporter" />
+      <PageHeader title="Rapporter" subtitle="Det en revisor ber om: kundreskontra, momsrapport och SIE-fil." />
 
       <div className="mb-6 flex gap-2">
         {(

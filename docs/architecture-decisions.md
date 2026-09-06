@@ -907,6 +907,33 @@ the real library.
 
 ---
 
+## 49. The UI is hand-built on a small token set, with no component library
+
+**Context:** the first frontend was functional and looked like a spreadsheet.
+A portfolio project is judged in its first three seconds, and a financial
+product is expected to look like one.
+
+**Decision:** a redesign on Tailwind 4 with a deliberately small token set in
+`index.css` — one accent hue, one "ink" for dark surfaces, one reserved
+colour for money that arrived — Inter for its tabular figures, and every
+component still written by hand in `ui.tsx`. Sidebar navigation in the app,
+because finance software is used for hours across many sections and a
+vertical list with icons scans faster than a row of words. The landing page's
+hero is a real invoice card whose ledger writes itself in, built from the
+same formatting functions the app uses, because the ledger is the product.
+
+**Rejected:** a component library (shadcn, MUI). It would look polished in an
+afternoon and leave nothing explainable — the whole point of this project is
+that every line can be defended. Also rejected: stock illustrations. Every
+visual on the landing page is a working component showing real behaviour.
+
+**Two rules the pass reinforced:** motion is used twice, briefly, and honours
+`prefers-reduced-motion`; and a plain CSS rule outside Tailwind's layers
+outranks a utility on the same element — the hero was white for one build
+because a `background` shorthand reset the colour a utility had set.
+
+---
+
 ## Open decisions
 
 | Question | Status |

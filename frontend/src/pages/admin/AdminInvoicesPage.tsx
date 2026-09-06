@@ -67,6 +67,7 @@ export function AdminInvoicesPage() {
     <>
       <PageHeader
         title="Fakturor"
+        subtitle="Alla dokument i nummerserien: fakturor och kreditfakturor."
         action={
           <Link to="/invoices/new">
             <Button>Ny faktura</Button>
