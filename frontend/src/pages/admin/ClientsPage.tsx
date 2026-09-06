@@ -27,6 +27,7 @@ export function ClientsPage() {
     <>
       <PageHeader
         title="Kunder"
+        subtitle="Varje kund får ett konto och en inbjudan att välja lösenord."
         action={
           <Button onClick={() => setIsCreating(true)} disabled={isCreating}>
             Ny kund

@@ -10,7 +10,8 @@ import type { Invoice, InvoiceStatus, LedgerType } from '../lib/types.ts'
 // ─────────────────────────────────────────────────────────────
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: 'primary' | 'secondary' | 'danger'
+  /** inverted and ghost are for dark surfaces (the landing hero). */
+  variant?: 'primary' | 'secondary' | 'danger' | 'inverted' | 'ghost'
   isLoading?: boolean
 }
 
@@ -23,14 +24,16 @@ export function Button({
   ...props
 }: ButtonProps) {
   const base =
-    'inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm ' +
+    'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm ' +
     'font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ' +
     'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2'
 
   const variants = {
-    primary: 'bg-brand-600 text-white hover:bg-brand-700',
-    secondary: 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
-    danger: 'bg-red-600 text-white hover:bg-red-700'
+    primary: 'bg-brand-600 text-white shadow-sm hover:bg-brand-700',
+    secondary: 'border border-slate-300 bg-white text-slate-700 shadow-sm hover:bg-slate-50',
+    danger: 'bg-red-600 text-white shadow-sm hover:bg-red-700',
+    inverted: 'bg-white text-ink-950 hover:bg-slate-100',
+    ghost: 'border border-white/20 text-white hover:bg-white/10'
   }
 
   return (
@@ -105,14 +108,25 @@ export function Field({ label, error, hint, id, className = '', ...props }: Fiel
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`rounded-lg border border-slate-200 bg-white ${className}`}>{children}</div>
+    <div className={`rounded-xl border border-slate-200/80 bg-white shadow-sm ${className}`}>{children}</div>
   )
 }
 
-export function PageHeader({ title, action }: { title: string; action?: ReactNode }) {
+export function PageHeader({
+  title,
+  subtitle,
+  action
+}: {
+  title: string
+  subtitle?: string
+  action?: ReactNode
+}) {
   return (
-    <div className="mb-6 flex items-center justify-between gap-4">
-      <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
+    <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">{title}</h1>
+        {subtitle && <p className="mt-1 text-sm text-slate-500">{subtitle}</p>}
+      </div>
       {action}
     </div>
   )
@@ -127,25 +141,26 @@ export function PageHeader({ title, action }: { title: string; action?: ReactNod
  * colour-blind reader, and roughly 8% of men are.
  */
 export function StatusBadge({ status, type = 'INVOICE' }: { status: InvoiceStatus; type?: Invoice['type'] }) {
-  const styles: Record<InvoiceStatus, { label: string; className: string }> = {
-    DRAFT: { label: 'Utkast', className: 'bg-slate-100 text-slate-700' },
-    SENT: { label: 'Skickad', className: 'bg-blue-100 text-blue-800' },
-    PAID: { label: 'Betald', className: 'bg-green-100 text-green-800' },
-    OVERDUE: { label: 'Förfallen', className: 'bg-red-100 text-red-800' },
-    CREDITED: { label: 'Krediterad', className: 'bg-amber-100 text-amber-900' }
+  const styles: Record<InvoiceStatus, { label: string; className: string; dot: string }> = {
+    DRAFT: { label: 'Utkast', className: 'bg-slate-100 text-slate-700', dot: 'bg-slate-400' },
+    SENT: { label: 'Skickad', className: 'bg-blue-50 text-blue-800', dot: 'bg-blue-500' },
+    PAID: { label: 'Betald', className: 'bg-emerald-50 text-emerald-800', dot: 'bg-emerald-500' },
+    OVERDUE: { label: 'Förfallen', className: 'bg-red-50 text-red-800', dot: 'bg-red-500' },
+    CREDITED: { label: 'Krediterad', className: 'bg-amber-50 text-amber-900', dot: 'bg-amber-500' }
   }
 
   // A credit note is "sent" in the database but that word means nothing to
   // a reader; the document kind is what matters.
-  const { label, className } =
+  const { label, className, dot } =
     type === 'CREDIT_NOTE'
-      ? { label: 'Kreditfaktura', className: 'bg-violet-100 text-violet-900' }
+      ? { label: 'Kreditfaktura', className: 'bg-violet-50 text-violet-900', dot: 'bg-violet-500' }
       : styles[status]
 
   return (
     <span
-      className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${className}`}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${className}`}
     >
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden />
       {label}
     </span>
   )

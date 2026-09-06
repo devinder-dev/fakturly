@@ -30,7 +30,7 @@ export function useDemoAccounts() {
   })
 }
 
-export function DemoLogins({ className = '' }: { className?: string }) {
+export function DemoLogins({ className = '', tone = 'light' }: { className?: string; tone?: 'light' | 'dark' }) {
   const demo = useDemoAccounts()
   const { login } = useAuth()
   const navigate = useNavigate()
@@ -53,14 +53,15 @@ export function DemoLogins({ className = '' }: { className?: string }) {
 
   return (
     <div className={className}>
-      <p className="mb-3 text-center text-xs font-medium uppercase tracking-wide text-slate-500">
+      <p className={`mb-3 text-xs font-semibold uppercase tracking-wider ${tone === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
         Prova demot
       </p>
       <div className="grid gap-2 sm:grid-cols-2">
-        {demo.data.accounts.map((account) => (
+        {demo.data.accounts.map((account, index) => (
           <Button
             key={account.email}
-            variant="secondary"
+            // On the dark hero the first button is the bright one.
+            variant={tone === 'dark' ? (index === 0 ? 'inverted' : 'ghost') : index === 0 ? 'primary' : 'secondary'}
             onClick={() => signIn(account)}
             isLoading={busy === account.email}
             disabled={busy !== null}
@@ -71,12 +72,12 @@ export function DemoLogins({ className = '' }: { className?: string }) {
         ))}
       </div>
       {error && (
-        <p className="mt-2 text-center text-sm text-red-700" role="alert">
+        <p className="mt-2 text-sm text-red-500" role="alert">
           {error}
         </p>
       )}
-      <p className="mt-3 text-center text-xs text-slate-500">
-        Demodata återställs varje natt. Allt du ändrar försvinner.
+      <p className={`mt-3 text-xs ${tone === 'dark' ? 'text-slate-500' : 'text-slate-500'}`}>
+        Inget konto behövs. Demodata återställs varje natt kl 03:00.
       </p>
     </div>
   )

@@ -40,7 +40,7 @@ export function ClientInvoicesPage() {
 
   return (
     <>
-      <PageHeader title="Mina fakturor" />
+      <PageHeader title="Mina fakturor" subtitle="Dina fakturor, med status och vad som är kvar att betala." />
 
       {isLoading && <Spinner />}
       {error && <ErrorMessage error={error} />}

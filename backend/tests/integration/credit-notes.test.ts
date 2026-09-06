@@ -191,7 +191,10 @@ describe('POST /invoices/:id/credit-note', () => {
     const original = await issue()
     const cn = (await asAdmin()('POST', `/invoices/${original.id}/credit-note`)).json().creditNote
 
-    await runOverdueCheck(new Date('2099-06-01T00:00:00.000Z'))
+    // Two days from now, not a far-future date: the check is global, and a
+    // year-2099 run against the shared dev database would pile decades of
+    // interest onto every open invoice in it (it did, once).
+    await runOverdueCheck(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000))
 
     const stored = await prisma.invoice.findUniqueOrThrow({ where: { id: cn.id } })
     expect(stored.status).toBe('SENT')
