@@ -58,7 +58,7 @@ export default async function webhookRoutes(app: FastifyInstance) {
 
     let event
     try {
-      event = verifyWebhookSignature(rawBody, signature)
+      event = await verifyWebhookSignature(rawBody, signature)
     } catch (error) {
       if (error instanceof WebhookSignatureError) {
         // 400, not 500: the request is malformed and retrying it will not

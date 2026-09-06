@@ -146,20 +146,9 @@ export class WebhookSignatureError extends Error {}
  * a signature check, "invoice 2026-0001 is paid" is a message anyone on the
  * internet can send us.
  */
-export function verifyWebhookSignature(rawBody: string, signature: string): StripeEvent {
+export async function verifyWebhookSignature(rawBody: string, signature: string): Promise<StripeEvent> {
   if (stripeClient && env.STRIPE_WEBHOOK_SECRET) {
-    try {
-      const event = stripeClient.webhooks.constructEvent(
-        rawBody,
-        signature,
-        env.STRIPE_WEBHOOK_SECRET
-      )
-      return event as unknown as StripeEvent
-    } catch (error) {
-      throw new WebhookSignatureError(
-        error instanceof Error ? error.message : 'Invalid signature'
-      )
-    }
+    return verifyWithStripe(stripeClient, rawBody, signature, env.STRIPE_WEBHOOK_SECRET)
   }
 
   // Stub mode. env.ts guarantees this branch is unreachable in production.
@@ -168,6 +157,35 @@ export function verifyWebhookSignature(rawBody: string, signature: string): Stri
   }
 
   return verifyStubSignature(rawBody, signature)
+}
+
+/**
+ * The real verification, through Stripe's SDK.
+ *
+ * MUST be the async variant. Under Bun the SDK picks a WebCrypto-based
+ * provider whose HMAC is async-only, and the synchronous `constructEvent`
+ * throws "SubtleCryptoProvider cannot be used in a synchronous context"
+ * BEFORE it compares anything. Our catch block then reported every genuine
+ * Stripe delivery as "Invalid signature" — which is exactly what the first
+ * production deploy did, for an hour, while the secret was correct all
+ * along. Node's default provider is synchronous, so nothing ever showed it.
+ *
+ * Takes the client as an argument so a test can run this path with a dummy
+ * key and a header the SDK itself signed. The stub path is exercised by the
+ * rest of the suite; this one needs the real SDK.
+ */
+export async function verifyWithStripe(
+  client: Stripe,
+  rawBody: string,
+  signature: string,
+  secret: string
+): Promise<StripeEvent> {
+  try {
+    const event = await client.webhooks.constructEventAsync(rawBody, signature, secret)
+    return event as unknown as StripeEvent
+  } catch (error) {
+    throw new WebhookSignatureError(error instanceof Error ? error.message : 'Invalid signature')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -882,6 +882,31 @@ path.
 
 ---
 
+## 48. Webhook verification goes through the SDK's async path — a Bun lesson
+
+**Context:** the first real Stripe payment in production was refused with
+400 "Invalid signature" for an hour. The secret was correct. The stub path
+had passed every test.
+
+**Cause:** under Bun, Stripe's SDK selects a WebCrypto provider whose HMAC is
+asynchronous. The synchronous `constructEvent` throws
+"SubtleCryptoProvider cannot be used in a synchronous context" before
+comparing anything, and our catch reported it as a bad signature. Under Node
+the default provider is synchronous, so the same code works — which is why
+nothing in the ecosystem's examples warns about it.
+
+**Decision:** `constructEventAsync`, always. The verification function is
+split so the real SDK path takes the client as an argument, and a unit test
+runs it with a dummy key and a header the SDK itself signed. The stub path
+proved the surrounding logic; only the real SDK could prove this.
+
+**Broader lesson, recorded because it will recur:** a stub that mirrors the
+real thing tests everything except the real thing's runtime behaviour. For a
+boundary that decides whether money is recorded, one test must go through
+the real library.
+
+---
+
 ## Open decisions
 
 | Question | Status |
