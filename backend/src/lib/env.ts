@@ -79,6 +79,25 @@ const envSchema = z.object({
   COMPANY_BANKGIRO: z.string().min(1).default('123-4567'),
 
   /**
+   * Whether the frontend and the API live on different sites.
+   *
+   * The refresh token travels in a cookie that is SameSite=Strict by default,
+   * which is the strongest CSRF protection there is: the browser never sends
+   * it from another site. It also means a frontend on vercel.app cannot
+   * refresh against an API on onrender.com — the cookie is simply not sent.
+   *
+   * Set to "true" when the two are on different sites. The cookie becomes
+   * SameSite=None (which requires Secure). What still protects the refresh
+   * endpoint then: the CORS allowlist means another site cannot READ the
+   * response, so a forged refresh yields it nothing, and the cookie is
+   * scoped to /auth so it never reaches any endpoint that changes data.
+   */
+  CROSS_SITE_COOKIES: z
+    .string()
+    .optional()
+    .transform((value) => value === 'true' || value === '1'),
+
+  /**
    * Error tracking. Optional everywhere: without a DSN the Sentry SDK is
    * never initialised and nothing leaves the server. With one, unexpected
    * errors (the ones the error handler maps to 500) are reported with their

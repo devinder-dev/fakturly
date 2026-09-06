@@ -33,15 +33,20 @@ const REFRESH_COOKIE = 'fakturly_refresh'
  * to hold in memory. It is short-lived, and keeping it out of cookies means
  * it is never sent automatically — so it cannot be used in a CSRF attack.
  *
- * NOTE for week 4: if the frontend ends up on a different domain from the
- * API, sameSite 'strict' will block the cookie and this must become
- * 'none' + secure, with CORS credentials configured.
+ * CROSS-SITE DEPLOYMENTS: when the frontend is on vercel.app and the API on
+ * onrender.com, 'strict' means the cookie is never sent and every page
+ * reload logs the user out. CROSS_SITE_COOKIES=true switches to 'none',
+ * which browsers only accept together with Secure. See lib/env.ts for what
+ * still protects the refresh endpoint in that mode. This note predicted the
+ * problem in week 1; the first production deploy confirmed it.
  */
-function refreshCookieOptions(expiresAt: Date) {
+export function refreshCookieOptions(expiresAt: Date) {
   return {
     httpOnly: true,
-    secure: isProduction,
-    sameSite: 'strict' as const,
+    // SameSite=None is refused by browsers without Secure, so the switch
+    // forces it on even where isProduction would not.
+    secure: isProduction || env.CROSS_SITE_COOKIES,
+    sameSite: env.CROSS_SITE_COOKIES ? ('none' as const) : ('strict' as const),
     path: '/auth',
     expires: expiresAt,
     maxAge: env.REFRESH_TOKEN_DAYS * 24 * 60 * 60

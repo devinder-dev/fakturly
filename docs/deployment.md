@@ -126,6 +126,7 @@ file is the reference. The ones that matter for a deploy:
 | `STRIPE_WEBHOOK_SECRET` | yes | from the dashboard endpoint, not `stripe listen` |
 | `RESEND_API_KEY` | yes | `onboarding@resend.dev` only delivers to the account owner |
 | `DEMO_MODE` | no | `true` for the showcase, absent otherwise |
+| `CROSS_SITE_COOKIES` | yes, when frontend and API are on different domains | Makes the refresh cookie `SameSite=None; Secure`. Without it every page reload logs the user out (ADR 47) |
 | `COMPANY_*` | no | seller details on the PDF; defaults are the fictional demo company |
 
 ## Running the image locally

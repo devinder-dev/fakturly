@@ -853,6 +853,35 @@ find a broken code path, not to watch a user.
 
 ---
 
+## 47. The refresh cookie is SameSite=Strict, unless the deployment says otherwise
+
+**Context:** the first production deploy put the frontend on vercel.app and
+the API on onrender.com. Logging in worked; reloading the page logged you out.
+
+**Why:** the refresh token lives in an httpOnly cookie set with
+`SameSite=Strict`, the strongest CSRF protection a cookie can have — the
+browser never attaches it to a request that originates from another site.
+vercel.app *is* another site from onrender.com's point of view, so the
+refresh call on page load carried no cookie. A comment in the auth controller
+had predicted exactly this in week 1.
+
+**Decision:** an explicit switch, `CROSS_SITE_COOKIES=true`, that changes the
+cookie to `SameSite=None; Secure`. Default off, so the strict cookie stays
+wherever frontend and API share a site.
+
+**What still protects the refresh endpoint in that mode:** CORS. Another site
+can *send* the request with the cookie, but the allowlist means its script
+cannot *read* the response — and the access token is in the body, not in a
+cookie, so a forged refresh yields the attacker nothing. The cookie is also
+scoped to `/auth`, so it never reaches an endpoint that changes data.
+
+**Rejected:** a custom domain with the API under `api.fakturly.se`, which
+would make the two "same site" again and keep Strict. Right answer for a
+company, one more account and DNS setup for a demo. Recorded as the upgrade
+path.
+
+---
+
 ## Open decisions
 
 | Question | Status |

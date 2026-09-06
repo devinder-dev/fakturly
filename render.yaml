@@ -29,6 +29,10 @@ services:
         value: "3000"
       - key: DEMO_MODE
         value: "true"
+      # The frontend is on Vercel, the API here: two sites. Without this the
+      # refresh cookie (SameSite=Strict) is never sent and reloads log out.
+      - key: CROSS_SITE_COOKIES
+        value: "true"
       - key: FRONTEND_URL
         sync: false
       - key: DATABASE_URL
