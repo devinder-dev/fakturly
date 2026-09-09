@@ -249,20 +249,21 @@ export const LEDGER_LABELS: Record<LedgerType, string> = {
  * Downloads a file the API produced, with the access token attached.
  *
  * Same reason as the PDF: a plain link sends no Authorization header. The
- * filename comes from the caller, not from the response — reading
- * Content-Disposition across CORS needs an exposed header, and the caller
- * already knows what it asked for.
+ * filename is the SERVER's, read from Content-Disposition (exposed through
+ * CORS for exactly this). The browser never composes a name from form
+ * state, so there is nothing here for a static scanner to worry about, and
+ * one place — the controller — decides what a report is called.
  */
 export async function downloadFromApi(
-  fetchBlob: (path: string) => Promise<Blob>,
+  fetchFile: (path: string) => Promise<{ blob: Blob; filename: string | null }>,
   path: string,
-  filename: string
+  fallback: string
 ): Promise<void> {
-  const blob = await fetchBlob(path)
+  const { blob, filename } = await fetchFile(path)
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
-  anchor.download = filename
+  anchor.download = filename ?? fallback
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()

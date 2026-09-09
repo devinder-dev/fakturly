@@ -60,7 +60,7 @@ afterAll(async () => {
   await clearRateLimits()
 })
 
-async function issue(grossExpectedOre: number, dueDate = '2099-01-01T00:00:00.000Z') {
+async function issue(grossExpectedOre: number, dueDate = '2027-12-31T00:00:00.000Z') {
   const created = await asAdmin()('POST', '/invoices', {
     clientId,
     dueDate,
@@ -120,7 +120,7 @@ describe('the figures move with the ledger', () => {
 
     await asAdmin()('POST', '/invoices', {
       clientId,
-      dueDate: '2099-01-01T00:00:00.000Z',
+      dueDate: '2027-12-31T00:00:00.000Z',
       items: [{ description: 'Utkast', quantity: 1, unitPriceOre: 999_999, vatRate: VatRate.STANDARD }]
     })
 

@@ -103,10 +103,15 @@ function sendViaConsole(message: EmailMessage): SendResult {
  * middle of a request.
  */
 export async function sendEmail(message: EmailMessage): Promise<SendResult> {
+  // The public demo hands ADMIN to strangers, and an admin can type any
+  // address into "new client" or "send invoice". With a verified sending
+  // domain that is an open relay branded as us. So in demo mode the real
+  // provider is never used, whatever keys are configured.
+  if (env.DEMO_MODE) return sendViaConsole(message)
   return resendClient ? sendViaResend(message) : sendViaConsole(message)
 }
 
-/** True when a real provider is configured. Used by the readiness endpoint. */
+/** True when a real provider is configured and in use. */
 export function isMailerConfigured(): boolean {
-  return resendClient !== null
+  return resendClient !== null && !env.DEMO_MODE
 }

@@ -1,7 +1,7 @@
 // invoice.repository.ts — database queries for Invoice.
 
 import { prisma } from '../lib/prisma.ts'
-import type { InvoiceStatus, InvoiceType, TransactionType } from '../generated/prisma/client.ts'
+import type { InvoiceStatus, InvoiceType, TransactionType, Prisma } from '../generated/prisma/client.ts'
 
 /** Every field an invoice endpoint returns, defined once. */
 const invoiceSelect = {
@@ -23,6 +23,9 @@ const invoiceSelect = {
   lateFeeOre: true,
   reminderFeeOre: true,
   reminderSentAt: true,
+  // The current checkout session (cs_…) while a link is open, the payment
+  // intent (pi_…) once paid. Needed to expire an old link before a new one.
+  stripePaymentId: true,
   issueDate: true,
   dueDate: true,
   sentAt: true,
@@ -91,6 +94,7 @@ export type InvoiceRecord = {
   lateFeeOre: number
   reminderFeeOre: number
   reminderSentAt: Date | null
+  stripePaymentId: string | null
   issueDate: Date
   dueDate: Date
   sentAt: Date | null
@@ -272,7 +276,20 @@ export async function markPaid(
   id: string,
   payment: { stripePaymentId: string; amountOre: number }
 ): Promise<InvoiceRecord | null> {
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction((tx) => markPaidWithin(tx, id, payment))
+}
+
+/**
+ * The body of markPaid, on a caller-supplied transaction client — so the
+ * webhook handler can put the event claim and the payment in ONE transaction
+ * (see webhookEvent.repository.claimEventAndRun).
+ */
+export async function markPaidWithin(
+  tx: Prisma.TransactionClient,
+  id: string,
+  payment: { stripePaymentId: string; amountOre: number }
+): Promise<InvoiceRecord | null> {
+  {
     const updated = await tx.invoice.updateMany({
       // type: INVOICE — a credit note is never paid; it is money going the
       // other way, and settling it here would record a phantom receipt.
@@ -305,7 +322,7 @@ export async function markPaid(
     })
 
     return invoice
-  })
+  }
 }
 
 /** Stores the Stripe checkout session id on an invoice. */

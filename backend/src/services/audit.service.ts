@@ -14,6 +14,7 @@
 // gap in the log. We choose availability here and shout loudly in the
 // application log instead.
 
+import { env } from '../lib/env.ts'
 import {
   createAuditEntry,
   findAuditEntries,
@@ -47,6 +48,8 @@ export const AuditAction = {
   PAYMENT_LINK_CREATED: 'PAYMENT_LINK_CREATED',
   /** No acting user — Stripe told us, not a person. */
   PAYMENT_RECEIVED: 'PAYMENT_RECEIVED',
+  /** Money arrived for an invoice that was not open. Needs a human and a refund. */
+  PAYMENT_UNAPPLIED: 'PAYMENT_UNAPPLIED',
   /** No acting user — the scheduler, not a person. */
   INVOICE_OVERDUE: 'INVOICE_OVERDUE',
   CREDIT_NOTE_ISSUED: 'CREDIT_NOTE_ISSUED',
@@ -80,7 +83,15 @@ export type AuditInput = Omit<AuditEntry, 'action' | 'resource'> & {
  */
 export async function record(input: AuditInput): Promise<void> {
   try {
-    await createAuditEntry(input)
+    // The demo publishes its audit log to anyone who clicks "admin". An IP
+    // address, a browser string and a typed-in email are personal data under
+    // GDPR, and a visitor who mistypes their own address into the demo login
+    // must not find it on a public screen. So the demo records WHAT happened
+    // and WHO (by account), never from where.
+    const entry = env.DEMO_MODE
+      ? { ...input, ipAddress: null, userAgent: null, email: null }
+      : input
+    await createAuditEntry(entry)
   } catch (error) {
     // Never rethrow. See rule 2 above.
     console.error('[audit] failed to write audit entry', {

@@ -34,7 +34,11 @@ function escapeCell(value: CsvCell): string {
 
   let text = String(value)
 
-  if (/^[=+\-@]/.test(text)) {
+  // A negative amount also starts with "-", and prefixing it would turn every
+  // credit into text. Amounts are exactly digits, a comma and two decimals;
+  // anything else that starts with a formula character gets the guard.
+  const isAmount = /^-?\d+,\d{2}$/.test(text)
+  if (!isAmount && /^[=+\-@]/.test(text)) {
     text = `\t${text}`
   }
 

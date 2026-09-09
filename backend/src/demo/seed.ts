@@ -71,6 +71,9 @@ type DemoClient = {
   password?: string
 }
 
+// The scenery clients use example.se addresses: a reserved domain, so a
+// demo visitor who presses "skicka påminnelse" can never reach a real
+// mailbox even if a mail provider were wired up (it is not, in demo mode).
 const CLIENTS: DemoClient[] = [
   {
     name: 'Nordström Bygg AB',
@@ -81,25 +84,25 @@ const CLIENTS: DemoClient[] = [
   },
   {
     name: 'Café Linnéa',
-    email: 'linnea@cafe-linnea.se',
+    email: 'linnea@cafe-linnea.example.se',
     phone: '031-98 76 54',
     address: 'Linnégatan 22, 413 04 Göteborg'
   },
   {
     name: 'Advokatbyrån Ek & Partner',
-    email: 'ekonomi@ekpartner.se',
+    email: 'ekonomi@ekpartner.example.se',
     phone: '08-555 010 20',
     address: 'Birger Jarlsgatan 6, 114 34 Stockholm'
   },
   {
     name: 'Solkraft Installationer AB',
-    email: 'faktura@solkraft.se',
+    email: 'faktura@solkraft.example.se',
     phone: '040-12 34 56',
     address: 'Solgatan 3, 211 22 Malmö'
   },
   {
     name: 'Lund Design Studio',
-    email: 'hej@lunddesign.se',
+    email: 'hej@lunddesign.example.se',
     phone: '046-22 33 44',
     address: 'Stora Gråbrödersgatan 9, 222 22 Lund'
   }

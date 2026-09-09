@@ -5,6 +5,7 @@
 
 import {
   createCheckoutSession,
+  expireCheckoutSession,
   type StripeEvent,
   isStripeConfigured
 } from '../lib/stripe.ts'
@@ -80,6 +81,13 @@ export async function createPaymentLink(
     cancelUrl: `${env.FRONTEND_URL}/invoices/${invoice.id}?payment=cancelled`
   })
 
+  // Any earlier checkout link for this invoice stops working. Without this,
+  // two links stay payable for 24 hours and a customer who opens both pays
+  // twice — the second payment then lands as "unapplied" below.
+  if (invoice.stripePaymentId?.startsWith('cs_')) {
+    await expireCheckoutSession(invoice.stripePaymentId)
+  }
+
   await invoiceRepository.attachCheckoutSession(invoice.id, session.id)
 
   await record({
@@ -120,16 +128,10 @@ export type WebhookOutcome =
  * paid.
  */
 export async function handleStripeEvent(event: StripeEvent): Promise<WebhookOutcome> {
-  // Layer 1 — claim the delivery. Before the work, never after: a crash
-  // between doing the work and recording it would let the retry redo it.
-  const claimed = await webhookEventRepository.claimEvent(event.id, event.type)
-  if (!claimed) {
-    return { handled: false, reason: 'duplicate_event' }
-  }
-
   if (event.type !== 'checkout.session.completed') {
     // Acknowledged, not an error. Returning a failure would make Stripe retry
-    // an event we are never going to act on.
+    // an event we are never going to act on. Not claimed either: there is no
+    // work to protect from a repeat.
     return { handled: false, reason: `unhandled_type:${event.type}` }
   }
 
@@ -174,13 +176,39 @@ export async function handleStripeEvent(event: StripeEvent): Promise<WebhookOutc
     })
   }
 
-  // Layer 2 — only SENT or OVERDUE match.
-  const paid = await invoiceRepository.markPaid(invoiceId, {
-    stripePaymentId: session.payment_intent ?? session.id,
-    amountOre
-  })
+  // Layer 1 and layer 2 together, in ONE transaction: claim the event id,
+  // then mark paid where the status still allows it. A repeat delivery fails
+  // the claim; a failure after the claim rolls it back so the retry works.
+  const outcome = await webhookEventRepository.claimEventAndRun(event.id, event.type, (tx) =>
+    invoiceRepository.markPaidWithin(tx, invoiceId, {
+      stripePaymentId: session.payment_intent ?? session.id,
+      amountOre
+    })
+  )
+
+  if (!outcome.claimed) {
+    return { handled: false, reason: 'duplicate_event' }
+  }
+
+  const paid = outcome.result
 
   if (!paid) {
+    // Stripe says money arrived for an invoice that is not open — most likely
+    // paid a second time through an older checkout link. This is NOT a quiet
+    // outcome: it is money we hold and cannot apply, and someone must refund
+    // it. Loud in the log and in the audit trail, so it cannot go unnoticed.
+    console.error('[payment] paid session for a non-payable invoice — refund needed', {
+      invoiceId,
+      invoiceNumber: invoice.invoiceNumber,
+      status: invoice.status,
+      sessionId: session.id,
+      amountOre
+    })
+    await record({
+      action: AuditAction.PAYMENT_UNAPPLIED,
+      resource: AuditResource.INVOICE,
+      resourceId: invoiceId
+    })
     return { handled: false, reason: 'invoice_not_payable' }
   }
 

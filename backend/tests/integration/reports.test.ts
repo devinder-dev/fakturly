@@ -165,7 +165,7 @@ describe('GET /reports/vat', () => {
   test('a credit note reduces the period by exactly what it cancels', async () => {
     const created = await asAdmin()('POST', '/invoices', {
       clientId,
-      dueDate: '2099-01-01T00:00:00.000Z',
+      dueDate: '2027-12-31T00:00:00.000Z',
       items: [{ description: 'Extra', quantity: 1, unitPriceOre: 40_000, vatRate: VatRate.STANDARD }]
     })
     const id = created.json().invoice.id

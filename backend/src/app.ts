@@ -59,7 +59,13 @@ export async function buildApp(): Promise<FastifyInstance> {
     // Fastify only trusts the X-Forwarded-For header if we opt in.
     // We need the real client IP for rate limiting and audit logs once the
     // app sits behind a proxy (Railway, Render, nginx).
-    trustProxy: isProduction
+    //
+    // ONE hop, not `true`. With `true` Fastify trusts every entry in
+    // X-Forwarded-For, and a client can prepend its own: a fresh fake IP per
+    // request would give it a fresh rate-limit bucket every time, and the
+    // audit log would record whatever address it chose. With `1`, the address
+    // is the one the proxy itself appended, which the client cannot forge.
+    trustProxy: isProduction ? 1 : false
   })
 
   // Error handler FIRST. Registered after the routes, Fastify would use its

@@ -6,6 +6,7 @@
 import type { FastifyInstance } from 'fastify'
 import * as authController from '../controllers/auth.controller.ts'
 import { authenticate } from '../middleware/authenticate.ts'
+import { sameOrigin } from '../middleware/sameOrigin.ts'
 import {
   LOGIN_RATE_LIMIT,
   REFRESH_RATE_LIMIT,
@@ -39,7 +40,7 @@ export default async function authRoutes(app: FastifyInstance) {
    */
   app.post(
     '/auth/refresh',
-    { config: { rateLimit: REFRESH_RATE_LIMIT } },
+    { config: { rateLimit: REFRESH_RATE_LIMIT }, onRequest: [sameOrigin] },
     authController.refresh
   )
 
@@ -51,7 +52,7 @@ export default async function authRoutes(app: FastifyInstance) {
    * to end their session is not an attack, and failing to log them out is
    * worse than any load it could cause.
    */
-  app.post('/auth/logout', authController.logout)
+  app.post('/auth/logout', { onRequest: [sameOrigin] }, authController.logout)
 
   /**
    * POST /auth/set-password

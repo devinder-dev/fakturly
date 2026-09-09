@@ -57,19 +57,24 @@ export type AuthResult = {
 async function issueTokenPair(
   user: { id: string; email: string; role: Role },
   familyId: string,
-  context: RequestContext
+  context: RequestContext,
+  /** When rotating: the token being spent, marked in the same transaction. */
+  rotatingTokenId?: string
 ): Promise<AuthResult> {
   const access = createAccessToken(user.id, user.role)
   const refresh = createRefreshToken()
 
-  await refreshTokenRepository.createRefreshToken({
-    tokenHash: refresh.tokenHash,
-    userId: user.id,
-    familyId,
-    expiresAt: refresh.expiresAt,
-    createdByIp: context.ip,
-    userAgent: context.userAgent
-  })
+  await refreshTokenRepository.createRefreshToken(
+    {
+      tokenHash: refresh.tokenHash,
+      userId: user.id,
+      familyId,
+      expiresAt: refresh.expiresAt,
+      createdByIp: context.ip,
+      userAgent: context.userAgent
+    },
+    rotatingTokenId
+  )
 
   return {
     accessToken: access.token,
@@ -216,10 +221,18 @@ export async function refresh(
     throw new UnauthenticatedError()
   }
 
+  // Already revoked — by a logout, or by an earlier theft detection. A plain
+  // refusal, checked BEFORE the theft branch: otherwise every replay of a
+  // dead token would write another TOKEN_THEFT_DETECTED row, and anyone
+  // holding an old cookie could flood the highest-severity alert we have.
+  if (stored.revokedAt !== null) {
+    throw new UnauthenticatedError()
+  }
+
   // ── Theft detection ──────────────────────────────────────────
   // Nobody legitimately reuses a spent token.
   if (stored.rotatedAt !== null) {
-    const revokedCount = await refreshTokenRepository.revokeFamily(stored.familyId)
+    await refreshTokenRepository.revokeFamily(stored.familyId)
 
     // The highest-severity event this system produces. Someone holds a copy
     // of a token they should not have. This row is what an alert watches for.
@@ -231,12 +244,7 @@ export async function refresh(
       ipAddress: context.ip,
       userAgent: context.userAgent
     })
-    void revokedCount
 
-    throw new UnauthenticatedError()
-  }
-
-  if (stored.revokedAt !== null) {
     throw new UnauthenticatedError()
   }
 
@@ -251,11 +259,11 @@ export async function refresh(
     throw new UnauthenticatedError()
   }
 
-  // Spend the old token, then issue the new pair in the SAME family so the
-  // chain stays linked and revocable as a unit.
-  await refreshTokenRepository.markRotated(stored.id)
-
-  const result = await issueTokenPair(user, stored.familyId, context)
+  // Spend the old token and issue the new pair in the SAME family — in one
+  // transaction. Two writes would leave a user with a spent token and no new
+  // one if the second failed, and their next refresh would then look like
+  // theft and revoke the whole family.
+  const result = await issueTokenPair(user, stored.familyId, context, stored.id)
 
   await record({
     action: AuditAction.TOKEN_REFRESHED,

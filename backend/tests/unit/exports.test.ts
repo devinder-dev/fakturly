@@ -111,3 +111,17 @@ describe('sie', () => {
     expect(encodeCp437('a€b').toString('latin1')).toBe('a?b')
   })
 })
+
+describe('csv — amounts are not formulas', () => {
+  test('🔑 a negative amount keeps its leading minus', () => {
+    // Found by review: every credit was being tab-prefixed as a "formula"
+    // and opened as text in Excel.
+    const csv = toCsv(['belopp'], [[csvAmount(-6_000)]])
+    expect(csv).toContain('\r\n-60,00\r\n')
+    expect(csv).not.toContain('\t-60,00')
+  })
+
+  test('a free-text cell starting with a minus is still guarded', () => {
+    expect(toCsv(['d'], [['-1 rad']])).toContain('\t-1 rad')
+  })
+})

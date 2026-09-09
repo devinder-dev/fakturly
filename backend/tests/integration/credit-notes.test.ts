@@ -55,7 +55,7 @@ afterAll(async () => {
   await clearRateLimits()
 })
 
-async function issue(dueDate = '2099-01-01T00:00:00.000Z') {
+async function issue(dueDate = '2027-12-31T00:00:00.000Z') {
   const created = await asAdmin()('POST', '/invoices', { clientId, dueDate, items: ITEMS })
   const sent = await asAdmin()('POST', `/invoices/${created.json().invoice.id}/send`)
   if (sent.statusCode !== 200) throw new Error(`send failed ${sent.body}`)
@@ -152,7 +152,7 @@ describe('POST /invoices/:id/credit-note', () => {
   })
 
   test('a DRAFT cannot be credited — it was never issued', async () => {
-    const created = await asAdmin()('POST', '/invoices', { clientId, dueDate: '2099-01-01T00:00:00.000Z', items: ITEMS })
+    const created = await asAdmin()('POST', '/invoices', { clientId, dueDate: '2027-12-31T00:00:00.000Z', items: ITEMS })
     const res = await asAdmin()('POST', `/invoices/${created.json().invoice.id}/credit-note`)
     expect(res.statusCode).toBe(422)
   })

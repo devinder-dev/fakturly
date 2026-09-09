@@ -16,6 +16,7 @@
 
 import { createHash } from 'node:crypto'
 import { redis } from '../lib/redis.ts'
+import { env } from '../lib/env.ts'
 import { RateLimitError } from '../lib/errors.ts'
 
 /** The window within which failed attempts are counted. */
@@ -102,6 +103,12 @@ export async function clearFailedAttempts(email: string): Promise<void> {
  * an address that never existed".
  */
 export async function assertAccountNotLocked(email: string): Promise<void> {
+  // The demo accounts are shared by every visitor and their passwords are
+  // public. A hard lock would let one person's five wrong guesses shut the
+  // demo for everyone for fifteen minutes. The progressive delay still
+  // applies; only the 429 is skipped, and only in demo mode.
+  if (env.DEMO_MODE) return
+
   const attempts = await getFailedAttempts(email)
   if (attempts < MAX_ATTEMPTS) return
 

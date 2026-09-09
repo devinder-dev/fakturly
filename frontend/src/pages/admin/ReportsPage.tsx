@@ -72,7 +72,7 @@ function Aging() {
 
   const download = useMutation({
     mutationFn: () =>
-      downloadFromApi(api.getBlob, `/reports/aging?asOf=${asOf}&format=csv`, `kundreskontra-${asOf}.csv`)
+      downloadFromApi(api.getBlob, `/reports/aging?asOf=${asOf}&format=csv`, 'kundreskontra.csv')
   })
 
   return (
@@ -190,7 +190,7 @@ function Vat() {
 
   const download = useMutation({
     mutationFn: () =>
-      downloadFromApi(api.getBlob, `/reports/vat?from=${from}&to=${to}&format=csv`, `momsrapport-${from}-${to}.csv`)
+      downloadFromApi(api.getBlob, `/reports/vat?from=${from}&to=${to}&format=csv`, 'momsrapport.csv')
   })
 
   return (
@@ -256,7 +256,7 @@ function Sie() {
   const [year, setYear] = useState(new Date().getFullYear())
 
   const download = useMutation({
-    mutationFn: () => downloadFromApi(api.getBlob, `/reports/sie?year=${year}`, `fakturly-${year}.se`)
+    mutationFn: () => downloadFromApi(api.getBlob, `/reports/sie?year=${year}`, 'fakturly.se')
   })
 
   return (

@@ -21,18 +21,31 @@ export type CreateRefreshTokenInput = {
 }
 
 export async function createRefreshToken(
-  input: CreateRefreshTokenInput
+  input: CreateRefreshTokenInput,
+  /** When set, that token is marked rotated in the same transaction. */
+  rotatingTokenId?: string
 ): Promise<void> {
-  await prisma.refreshToken.create({
-    data: {
+  if (rotatingTokenId) {
+    // Both or neither: a spent token without its replacement would make the
+    // user's next refresh look like theft.
+    await prisma.$transaction([
+      prisma.refreshToken.update({ where: { id: rotatingTokenId }, data: { rotatedAt: new Date() } }),
+      prisma.refreshToken.create({ data: rowFrom(input) })
+    ])
+    return
+  }
+  await prisma.refreshToken.create({ data: rowFrom(input) })
+}
+
+function rowFrom(input: CreateRefreshTokenInput) {
+  return {
       tokenHash: input.tokenHash,
       userId: input.userId,
       familyId: input.familyId,
       expiresAt: input.expiresAt,
       createdByIp: input.createdByIp ?? null,
       userAgent: input.userAgent ?? null
-    }
-  })
+  }
 }
 
 /**

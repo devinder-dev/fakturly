@@ -35,7 +35,7 @@ export function captureException(error: unknown, tags: Record<string, string> = 
   Sentry.captureException(error, { tags })
 }
 
-/** True when a DSN was configured. Used by the readiness endpoint. */
+/** True when a DSN was configured. */
 export function isSentryEnabled(): boolean {
   return enabled
 }

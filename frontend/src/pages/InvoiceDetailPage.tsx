@@ -101,7 +101,7 @@ function InvoiceDetail({ id }: { id: string | undefined }) {
     mutationFn: async () => {
       const tab = window.open('', '_blank')
       try {
-        const blob = await api.getBlob(`/invoices/${id}/pdf`)
+        const { blob } = await api.getBlob(`/invoices/${id}/pdf`)
         const url = URL.createObjectURL(blob)
         if (tab) tab.location.href = url
         else window.location.href = url

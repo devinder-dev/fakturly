@@ -240,6 +240,18 @@ export function calculateLateInterest(
   return roundOre((outstandingOre * annualRate * daysLate) / 10_000 / 365)
 }
 
+/**
+ * The calendar year in Stockholm, not on the server's clock.
+ *
+ * The invoice number series is per year and legally significant. A server
+ * in a UTC data centre thinks it is still 31 December at 00:30 Stockholm
+ * time on 1 January, and would give the new year's first invoice last
+ * year's number.
+ */
+export function stockholmYear(at: Date = new Date()): number {
+  return Number(new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm', year: 'numeric' }).format(at))
+}
+
 /** Whole days between two dates, floored. Never negative. */
 export function daysBetween(from: Date, to: Date): number {
   const ms = to.getTime() - from.getTime()

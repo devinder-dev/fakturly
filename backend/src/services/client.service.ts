@@ -33,13 +33,10 @@ export type CreateClientInput = {
  *
  * The password is random and nobody — not even the admin who ran this — ever
  * sees it. It exists only because the column is required. The client receives
- * a set-password link by email instead.
- *
- * NOTE (week 3): that invite email is not built yet. Until it is, a
- * provisioned client cannot log in. This is deliberate scope, not an
- * oversight — sending the temporary password back in the API response would
- * put a working credential in an admin's browser history, a proxy log and
- * anyone's screen recording.
+ * a set-password link by email instead (see the invite below). Sending the
+ * temporary password back in the API response was rejected: it would put a
+ * working credential in an admin's browser history, a proxy log and anyone's
+ * screen recording.
  */
 export async function createClient(
   input: CreateClientInput,

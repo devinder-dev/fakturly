@@ -4,6 +4,7 @@
 // which is why these now live in the repository.
 
 import { describe, test, expect } from 'bun:test'
+import { createInvoiceSchema } from '../../src/validators/invoice.validator.ts'
 import {
   loginSchema,
   newPasswordSchema,
@@ -196,5 +197,23 @@ describe('idParamSchema', () => {
   test('rejects empty and absurdly long ids', () => {
     expect(idParamSchema.safeParse({ id: '' }).success).toBe(false)
     expect(idParamSchema.safeParse({ id: 'a'.repeat(100) }).success).toBe(false)
+  })
+})
+
+describe('createInvoiceSchema — due date bounds', () => {
+  const body = (dueDate: string) => ({
+    clientId: 'c1',
+    dueDate,
+    items: [{ description: 'x', quantity: 1, unitPriceOre: 100, vatRate: 2500 }]
+  })
+
+  test('accepts a date within five years either way', () => {
+    const soon = new Date(Date.now() + 30 * 86_400_000).toISOString()
+    expect(createInvoiceSchema.safeParse(body(soon)).success).toBe(true)
+  })
+
+  test('🔑 refuses a date more than five years away — a typo the nightly job would charge for', () => {
+    expect(createInvoiceSchema.safeParse(body('2015-01-01T00:00:00.000Z')).success).toBe(false)
+    expect(createInvoiceSchema.safeParse(body('2040-01-01T00:00:00.000Z')).success).toBe(false)
   })
 })

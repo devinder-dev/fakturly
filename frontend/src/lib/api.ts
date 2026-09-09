@@ -166,7 +166,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
  * bytes are fetched with the token, wrapped in a Blob, and handed to the
  * browser as an object URL. The one-shot refresh on 401 is reused.
  */
-async function requestBlob(path: string, isRetry = false): Promise<Blob> {
+export type DownloadedFile = { blob: Blob; filename: string | null }
+
+/** Reads `filename="…"` out of a Content-Disposition header. */
+function filenameFrom(disposition: string | null): string | null {
+  const match = disposition?.match(/filename="([^"]+)"/)
+  return match?.[1] ?? null
+}
+
+async function requestBlob(path: string, isRetry = false): Promise<DownloadedFile> {
   const headers: Record<string, string> = {}
   if (accessToken) headers.authorization = `Bearer ${accessToken}`
 
@@ -183,7 +191,12 @@ async function requestBlob(path: string, isRetry = false): Promise<Blob> {
     throw new ApiError(response.status, data as ApiErrorBody)
   }
 
-  return response.blob()
+  return {
+    blob: await response.blob(),
+    // The server's name for the file. Readable cross-origin only because the
+    // API exposes this header in its CORS config.
+    filename: filenameFrom(response.headers.get('content-disposition'))
+  }
 }
 
 export const api = {

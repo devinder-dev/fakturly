@@ -72,7 +72,14 @@ export const createInvoiceSchema = z.object({
    * falsify something else instead. The issue date is set server-side and
    * always records when the invoice was actually created.
    */
-  dueDate: z.coerce.date({ message: 'Ogiltigt förfallodatum' }),
+  dueDate: z.coerce
+    .date({ message: 'Ogiltigt förfallodatum' })
+    // Bounded to ±5 years. Back-dating is legitimate; a typo of 2020 for
+    // 2026 is not, and the nightly job would charge six years of interest
+    // on it in one run before anyone noticed.
+    .refine((d) => Math.abs(d.getTime() - Date.now()) <= 5 * 366 * 24 * 60 * 60 * 1000, {
+      message: 'Förfallodatum måste ligga inom fem år från idag'
+    }),
 
   /**
    * At least one line. An invoice with no lines has no amount, and a

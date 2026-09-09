@@ -934,6 +934,48 @@ because a `background` shorthand reset the colour a utility had set.
 
 ---
 
+## 50. Hardening after the public launch — what an audit of the live demo found
+
+**Context:** the day the demo link went public, the code was audited as a
+stranger would read it. Nine findings, none exploitable for money, several
+worth fixing before more people clicked. Recorded here because each one is
+the kind of thing a reviewer asks about.
+
+| Finding | Fix |
+|---|---|
+| A demo admin could email anyone from our domain, and the seed's scenery clients had plausible real addresses | Demo mode never uses the real mail provider; seed domains are `example.se` |
+| The public audit log showed every visitor's IP, browser and typed-in email | Demo mode records who and what, never from where |
+| `trustProxy: true` let a client choose its own IP via `X-Forwarded-For`, and with it a fresh rate-limit bucket per request | `trustProxy: 1` — Render is exactly one hop |
+| The webhook claimed the event id and *then* did the work; a failure in between made the retry a "duplicate" and lost the payment | Claim and `markPaid` in one transaction; a failure rolls the claim back |
+| Two open checkout links for one invoice; a second payment was silently discarded | The previous session is expired when a new link is made; an unapplied payment writes `PAYMENT_UNAPPLIED` to the audit log and the error log |
+| `clearCookie` on logout lacked the cross-site attributes, so browsers kept the dead cookie; nothing stopped a hostile page posting to `/auth/logout` with the cookie | Same attributes on clear; an `Origin` check on refresh and logout |
+| Five wrong guesses on the public demo admin locked it for everyone | No hard lock in demo mode; the progressive delay stays |
+| Swagger UI from a CDN with no integrity check, on the API's origin | SRI hashes, a CSP, no persisted authorisation |
+| A replayed *revoked* token wrote a theft alert every time; rotate and issue were two writes | Revoked checked first; rotate + issue in one transaction |
+
+**Also fixed, from the "silly mistakes" list:** negative amounts in CSV were
+being tab-prefixed as formulas and became text in Excel; `dueDate` was
+unbounded, so a typo of 2020 would charge six years of interest overnight;
+the number series used the server's UTC year rather than Stockholm's; three
+comments described code that had since been written.
+
+**Static analysis, for the record:** Snyk Code reports seven items on this
+tree. Three are the report downloads, where its taint analysis follows the
+chosen date through `fetch` into a blob URL; the browser never composes a
+filename, the server names every download via an exposed
+`Content-Disposition` header. Two are the Stripe stub's signing key (ADR 35,
+unreachable in production) and two are the public demo logins (ADR 36).
+Each was read against the code and left as is; a finding that is understood
+and documented is worth more than one suppressed.
+
+**Known and left:** a forgotten-password flow does not exist (the pieces do,
+no route issues a reset); `User.failedLogins` and `Invoice.idempotencyKey`
+are dead columns; a paid amount that differs from the amount due is recorded
+as paid with a loud log line rather than as a partial payment. Each is a
+scope decision, not an oversight, and each is the next thing to build.
+
+---
+
 ## Open decisions
 
 | Question | Status |

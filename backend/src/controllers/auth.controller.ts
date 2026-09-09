@@ -58,7 +58,8 @@ export function refreshCookieOptions(expiresAt: Date) {
  *
  * Returns undefined instead of throwing, because the only caller is logout,
  * which must succeed even when the token is already expired or malformed.
- * (Step 5 replaces this with proper authenticate middleware for routes that
+ * (Protected routes use the authenticate middleware instead, which throws;
+ * this lenient reader is right for logout only, where a bad token must not
  * genuinely require a valid token.)
  */
 function readAccessTokenClaims(request: FastifyRequest): AccessTokenClaims | undefined {
@@ -182,9 +183,12 @@ export async function logout(request: FastifyRequest, reply: FastifyReply) {
     requestContext(request)
   )
 
-  // clearCookie must use the same path, or the browser keeps the old cookie
-  // and the user stays "logged in" from its point of view.
-  reply.clearCookie(REFRESH_COOKIE, { path: '/auth' })
+  // clearCookie must carry the SAME attributes the cookie was set with —
+  // path, and in cross-site mode SameSite=None; Secure — or the browser
+  // refuses the clearing Set-Cookie and keeps the dead cookie. Harmless
+  // (the family is revoked server-side) but not what "logout" should mean.
+  const { httpOnly, secure, sameSite, path } = refreshCookieOptions(new Date())
+  reply.clearCookie(REFRESH_COOKIE, { httpOnly, secure, sameSite, path })
 
   // 204: it worked, there is nothing to say about it.
   return reply.code(204).send()

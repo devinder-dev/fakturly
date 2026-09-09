@@ -3,7 +3,7 @@
 // Every money figure on an invoice is calculated here from the submitted
 // line items. Nothing the caller sends is trusted as a total.
 
-import { calculateLine, sumLines, REMINDER_FEE_ORE } from '../lib/money.ts'
+import { calculateLine, sumLines, REMINDER_FEE_ORE, stockholmYear } from '../lib/money.ts'
 import { allocateInvoiceNumber } from '../repositories/invoiceNumber.repository.ts'
 import * as invoiceRepository from '../repositories/invoice.repository.ts'
 import * as clientRepository from '../repositories/client.repository.ts'
@@ -76,7 +76,7 @@ export async function createInvoice(
     throw new BusinessRuleError('Fakturans totalbelopp kan inte vara noll')
   }
 
-  const invoiceNumber = await allocateInvoiceNumber(new Date().getFullYear())
+  const invoiceNumber = await allocateInvoiceNumber(stockholmYear())
 
   const invoice = await invoiceRepository.createInvoiceWithItems({
     invoiceNumber,
@@ -357,7 +357,7 @@ export async function issueCreditNote(
   // Same series as invoices. The law counts a credit note as an invoice, and
   // a separate numbering would leave a gap in the "real" series that someone
   // would have to explain.
-  const creditNoteNumber = await allocateInvoiceNumber(new Date().getFullYear())
+  const creditNoteNumber = await allocateInvoiceNumber(stockholmYear())
 
   const result = await invoiceRepository.createCreditNote({
     originalId,

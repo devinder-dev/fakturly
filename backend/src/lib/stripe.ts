@@ -112,6 +112,25 @@ export async function createCheckoutSession(
   return { id: session.id, url: session.url }
 }
 
+/**
+ * Expires a checkout session so its link stops accepting payment.
+ *
+ * Called before a new link is created for the same invoice. Never throws:
+ * an already-expired or already-completed session makes Stripe answer with
+ * an error, and neither is a reason to refuse the new link.
+ */
+export async function expireCheckoutSession(sessionId: string): Promise<void> {
+  if (!stripeClient || !sessionId.startsWith('cs_') || sessionId.startsWith('cs_stub_')) return
+  try {
+    await stripeClient.checkout.sessions.expire(sessionId)
+  } catch (error) {
+    console.warn('[stripe] could not expire previous session', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error)
+    })
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Webhook verification
 // ─────────────────────────────────────────────────────────────

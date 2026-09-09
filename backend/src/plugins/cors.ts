@@ -18,7 +18,12 @@ async function corsPlugin(app: FastifyInstance) {
    * An explicit allowlist. Never `origin: true`.
    *
    * `origin: true` reflects whatever Origin the request carried, which with
-   * `credentials: true` means ANY website can call this API using a logged-in
+   * `credentials: true,
+    // The browser may read this one response header across origins. The
+    // API names every download (faktura-2026-0007.pdf, kundreskontra-….csv)
+    // and the frontend uses that name rather than composing its own — one
+    // authority, and no filename ever built from form state in the browser.
+    exposedHeaders: ['content-disposition']` means ANY website can call this API using a logged-in
    * visitor's cookies. That combination is the single most common serious
    * CORS mistake, and browsers reject `origin: '*'` with credentials for
    * exactly that reason — but they happily accept a reflected origin, because

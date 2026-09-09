@@ -2,6 +2,10 @@
 
 import { prisma } from '../lib/prisma.ts'
 import { Prisma } from '../generated/prisma/client.ts'
+import type { PrismaClient } from '../generated/prisma/client.ts'
+
+/** Either the global client or a transaction's client. */
+export type DbClient = PrismaClient | Prisma.TransactionClient
 
 /**
  * Claims an event id. Returns false if it was already handled.
@@ -22,10 +26,11 @@ import { Prisma } from '../generated/prisma/client.ts'
 export async function claimEvent(
   eventId: string,
   type: string,
-  provider = 'stripe'
+  provider = 'stripe',
+  db: DbClient = prisma
 ): Promise<boolean> {
   try {
-    await prisma.processedWebhookEvent.create({
+    await db.processedWebhookEvent.create({
       data: { id: eventId, type, provider }
     })
     return true
@@ -39,6 +44,31 @@ export async function claimEvent(
     }
     throw error
   }
+}
+
+/**
+ * Claims the event and applies the work in ONE transaction.
+ *
+ * Claiming before working stops a duplicate delivery. But a claim that
+ * COMMITS before the work does is its own trap: if the work then fails — a
+ * database blip, a pool exhausted, a cold start — the retry finds the claim,
+ * says "duplicate", and the payment is never applied. The customer paid and
+ * the invoice keeps accruing interest.
+ *
+ * Inside one transaction both properties hold: a concurrent duplicate still
+ * hits the unique constraint, and a failure after the claim rolls the claim
+ * back so Stripe's retry does the work.
+ */
+export async function claimEventAndRun<T>(
+  eventId: string,
+  type: string,
+  work: (tx: Prisma.TransactionClient) => Promise<T>
+): Promise<{ claimed: false } | { claimed: true; result: T }> {
+  return prisma.$transaction(async (tx) => {
+    const claimed = await claimEvent(eventId, type, 'stripe', tx)
+    if (!claimed) return { claimed: false as const }
+    return { claimed: true as const, result: await work(tx) }
+  })
 }
 
 export async function hasProcessed(eventId: string): Promise<boolean> {
