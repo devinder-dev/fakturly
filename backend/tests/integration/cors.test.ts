@@ -96,3 +96,13 @@ describe('preflight', () => {
     // Uncached, that doubles the request count for the whole app.
   })
 })
+
+describe('exposed headers', () => {
+  test('Content-Disposition is readable cross-origin — downloads are named by the server', async () => {
+    const { buildTestApp } = await import('../helpers.ts')
+    const { env } = await import('../../src/lib/env.ts')
+    const app = await buildTestApp()
+    const res = await app.inject({ method: 'GET', url: '/health', headers: { origin: env.FRONTEND_URL } })
+    expect(res.headers['access-control-expose-headers']).toContain('content-disposition')
+  })
+})

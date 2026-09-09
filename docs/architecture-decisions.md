@@ -945,7 +945,7 @@ the kind of thing a reviewer asks about.
 |---|---|
 | A demo admin could email anyone from our domain, and the seed's scenery clients had plausible real addresses | Demo mode never uses the real mail provider; seed domains are `example.se` |
 | The public audit log showed every visitor's IP, browser and typed-in email | Demo mode records who and what, never from where |
-| `trustProxy: true` let a client choose its own IP via `X-Forwarded-For`, and with it a fresh rate-limit bucket per request | `trustProxy: 1` — Render is exactly one hop |
+| The review proposed `trustProxy: 1` to stop a client choosing its own IP via `X-Forwarded-For` | Tried, verified against production, **reverted**. A hop count reads the *last* entry, which on Render is the client's; Render's docs say it puts the real IP *first*, so `true` is the correct setting on this host. The comment in `app.ts` now says how to check this for any proxy |
 | The webhook claimed the event id and *then* did the work; a failure in between made the retry a "duplicate" and lost the payment | Claim and `markPaid` in one transaction; a failure rolls the claim back |
 | Two open checkout links for one invoice; a second payment was silently discarded | The previous session is expired when a new link is made; an unapplied payment writes `PAYMENT_UNAPPLIED` to the audit log and the error log |
 | `clearCookie` on logout lacked the cross-site attributes, so browsers kept the dead cookie; nothing stopped a hostile page posting to `/auth/logout` with the cookie | Same attributes on clear; an `Origin` check on refresh and logout |

@@ -60,12 +60,21 @@ export async function buildApp(): Promise<FastifyInstance> {
     // We need the real client IP for rate limiting and audit logs once the
     // app sits behind a proxy (Railway, Render, nginx).
     //
-    // ONE hop, not `true`. With `true` Fastify trusts every entry in
-    // X-Forwarded-For, and a client can prepend its own: a fresh fake IP per
-    // request would give it a fresh rate-limit bucket every time, and the
-    // audit log would record whatever address it chose. With `1`, the address
-    // is the one the proxy itself appended, which the client cannot forge.
-    trustProxy: isProduction ? 1 : false
+    // `true` means "the first address in X-Forwarded-For is the client".
+    // Whether that is safe depends entirely on what the proxy does with a
+    // header the client sent. Render's documentation: it puts the real
+    // client IP FIRST and keeps any client-supplied entries after it — so
+    // the first entry is proxy-controlled and cannot be forged.
+    //
+    // A hop count (`trustProxy: 1`) reads the LAST entry instead, which is
+    // the standard for nginx-style proxies that append. On Render that last
+    // entry is whatever the client sent. We shipped that once, on the advice
+    // of a review that assumed appending, and a forged header then got its
+    // own rate-limit bucket per request — verified against production, then
+    // reverted. The lesson: trustProxy is a statement about the proxy in
+    // front of you, and the only way to know is to read that proxy's docs
+    // and then test with a forged header.
+    trustProxy: isProduction
   })
 
   // Error handler FIRST. Registered after the routes, Fastify would use its
