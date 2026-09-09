@@ -215,6 +215,9 @@ export const paths: Record<string, Record<string, unknown>> = {
   '/health': {
     get: { tags: ['Health'], summary: 'Liveness — is the process up', responses: { 200: json({ type: 'object', properties: { status: { type: 'string' } } }) } }
   },
+  '/health/whoami': {
+    get: { tags: ['Health'], summary: 'How the API sees the caller — its own IP and forwarding chain', description: 'For configuring trustProxy honestly: which header entry the proxy controls differs per host.', responses: { 200: json({ type: 'object' }) } }
+  },
   '/health/ready': {
     get: { tags: ['Health'], summary: 'Readiness — can it reach PostgreSQL and Redis', responses: { 200: json({ type: 'object' }), 503: { description: 'A dependency is down' } } }
   },

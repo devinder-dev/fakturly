@@ -127,6 +127,25 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
   })
 
+  /**
+   * GET /health/whoami — how the API sees the caller.
+   *
+   * Returns only the caller's OWN address and forwarding chain, the way
+   * ifconfig.me does. It exists because "which entry in X-Forwarded-For is
+   * the real client" depends on the proxy in front of the API, no two hosts
+   * agree, and the rate limiter and audit log key on the answer. The only
+   * honest way to configure trustProxy is to look at this from outside.
+   */
+  app.get('/health/whoami', async (request) => {
+    return {
+      ip: request.ip,
+      forwardedFor: request.headers['x-forwarded-for'] ?? null,
+      cfConnectingIp: request.headers['cf-connecting-ip'] ?? null,
+      trueClientIp: request.headers['true-client-ip'] ?? null,
+      xRealIp: request.headers['x-real-ip'] ?? null
+    }
+  })
+
   // Auth: login, refresh, logout, me.
   await app.register(authRoutes)
 
