@@ -1,6 +1,7 @@
 // invoices.controller.ts — HTTP for invoice endpoints.
 
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { clientIp } from '../lib/clientIp.ts'
 import {
   createInvoiceSchema,
   invoiceListQuerySchema
@@ -90,7 +91,7 @@ function requireCaller(request: FastifyRequest): AuthenticatedUser {
 
 function requestContext(request: FastifyRequest) {
   return {
-    ip: request.ip,
+    ip: clientIp(request),
     userAgent: request.headers['user-agent']?.slice(0, 500)
   }
 }

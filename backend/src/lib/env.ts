@@ -98,6 +98,14 @@ const envSchema = z.object({
     .transform((value) => value === 'true' || value === '1'),
 
   /**
+   * The request header that carries the real client IP, when the proxy in
+   * front of the API sets one the client cannot forge. On Render (behind
+   * Cloudflare) that is `cf-connecting-ip`. Unset locally: request.ip is
+   * the socket address and nothing forwards. See lib/clientIp.ts.
+   */
+  CLIENT_IP_HEADER: z.string().optional(),
+
+  /**
    * Error tracking. Optional everywhere: without a DSN the Sentry SDK is
    * never initialised and nothing leaves the server. With one, unexpected
    * errors (the ones the error handler maps to 500) are reported with their

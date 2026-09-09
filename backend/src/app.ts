@@ -6,6 +6,7 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import cookie from '@fastify/cookie'
 import { isProduction, isTest } from './lib/env.ts'
+import { clientIp } from './lib/clientIp.ts'
 import corsPlugin from './plugins/cors.ts'
 import errorHandlerPlugin from './plugins/errorHandler.ts'
 import prismaPlugin from './plugins/prisma.ts'
@@ -60,20 +61,11 @@ export async function buildApp(): Promise<FastifyInstance> {
     // We need the real client IP for rate limiting and audit logs once the
     // app sits behind a proxy (Railway, Render, nginx).
     //
-    // `true` means "the first address in X-Forwarded-For is the client".
-    // Whether that is safe depends entirely on what the proxy does with a
-    // header the client sent. Render's documentation: it puts the real
-    // client IP FIRST and keeps any client-supplied entries after it — so
-    // the first entry is proxy-controlled and cannot be forged.
-    //
-    // A hop count (`trustProxy: 1`) reads the LAST entry instead, which is
-    // the standard for nginx-style proxies that append. On Render that last
-    // entry is whatever the client sent. We shipped that once, on the advice
-    // of a review that assumed appending, and a forged header then got its
-    // own rate-limit bucket per request — verified against production, then
-    // reverted. The lesson: trustProxy is a statement about the proxy in
-    // front of you, and the only way to know is to read that proxy's docs
-    // and then test with a forged header.
+    // Kept on so `request.protocol` and `request.hostname` reflect the
+    // original request behind Render's proxy. NOT relied on for the client
+    // address: X-Forwarded-For here begins with whatever the client sent
+    // (see /health/whoami), so anything security-relevant reads the address
+    // through lib/clientIp.ts instead.
     trustProxy: isProduction
   })
 
@@ -138,7 +130,10 @@ export async function buildApp(): Promise<FastifyInstance> {
    */
   app.get('/health/whoami', async (request) => {
     return {
-      ip: request.ip,
+      /** What the rate limiter and audit log will use. */
+      ip: clientIp(request),
+      /** What Fastify's trustProxy reading gives. */
+      fastifyIp: request.ip,
       forwardedFor: request.headers['x-forwarded-for'] ?? null,
       cfConnectingIp: request.headers['cf-connecting-ip'] ?? null,
       trueClientIp: request.headers['true-client-ip'] ?? null,

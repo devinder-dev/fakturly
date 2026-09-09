@@ -4,6 +4,7 @@
 // service produces both; this file only decides the headers.
 
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { clientIp } from '../lib/clientIp.ts'
 import {
   agingQuerySchema,
   vatQuerySchema,
@@ -71,7 +72,7 @@ export async function sie(request: FastifyRequest, reply: FastifyReply) {
   if (!caller) throw new UnauthenticatedError()
 
   const file = await reportService.sieExport(query.year, caller.id, {
-    ip: request.ip,
+    ip: clientIp(request),
     userAgent: request.headers['user-agent']?.slice(0, 500)
   })
 

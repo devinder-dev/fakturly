@@ -33,6 +33,11 @@ services:
       # refresh cookie (SameSite=Strict) is never sent and reloads log out.
       - key: CROSS_SITE_COOKIES
         value: "true"
+      # Render sits behind Cloudflare, which overwrites this header with the
+      # real client address. X-Forwarded-For here starts with whatever the
+      # client sent, so it cannot be used for rate limiting. See lib/clientIp.ts.
+      - key: CLIENT_IP_HEADER
+        value: cf-connecting-ip
       - key: FRONTEND_URL
         sync: false
       - key: DATABASE_URL

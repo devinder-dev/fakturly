@@ -5,6 +5,7 @@
 // here that decides whether a login should succeed, it belongs in the service.
 
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { clientIp } from '../lib/clientIp.ts'
 import { loginSchema, setPasswordSchema } from '../validators/auth.validator.ts'
 import * as authService from '../services/auth.service.ts'
 import { findAuthUserById } from '../repositories/user.repository.ts'
@@ -75,7 +76,7 @@ function readAccessTokenClaims(request: FastifyRequest): AccessTokenClaims | und
 
 function requestContext(request: FastifyRequest) {
   return {
-    ip: request.ip,
+    ip: clientIp(request),
     // Cap the length: a User-Agent is attacker-controlled and goes into the
     // database. No reason to store 8 KB of it.
     userAgent: request.headers['user-agent']?.slice(0, 500)
