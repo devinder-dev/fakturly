@@ -21,7 +21,7 @@ Not a CRUD tutorial — every decision is documented with its reasoning and the 
 ---
 
 > [!TIP]
-> **Live demo: [frontend-ten-pi-74.vercel.app](https://frontend-ten-pi-74.vercel.app)** —
+> **Live demo: [fakturly-app.vercel.app](https://fakturly-app.vercel.app)** —
 > press *Som administratör* on the landing page. API reference at
 > [fakturly-api.onrender.com/docs](https://fakturly-api.onrender.com/docs).
 > The dataset resets every night. The API runs on a free tier and takes up
