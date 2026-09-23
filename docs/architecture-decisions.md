@@ -1014,6 +1014,32 @@ minutes is exactly the mistake; once an hour is fine).
 
 ---
 
+## 52. Dependency updates: in-range by default, overrides only within a major
+
+**Context:** `bun audit` on 2026-09-23 reported 22 known vulnerabilities in
+the backend (9 high). The ones that mattered were in `fastify` < 5.12.1,
+including an `X-Forwarded-*` spoofing bug under `trustProxy` — the exact
+feature ADR 50 had to work around.
+
+**Decision:**
+
+- `bun update` — minor and patch versions inside the existing `^` ranges.
+  Major versions (ioredis 6, Sentry 11, TypeScript 7, Prisma 8) are left for
+  their own change: a major is the maintainer saying "this may break you".
+- Transitive packages still pinned to a vulnerable version by their parent
+  are forced with `overrides` — **only within the same major**: `fast-uri`
+  ^3.1.6, `find-my-way` ^9.7.0, `mysql2` ^3.24.4.
+- **Stripe stays on `~22.5.0`.** 22.6 moves the pinned API version, and the
+  SDK had no vulnerability. A payment API change does not ride along with a
+  security fix; it gets its own change and a read of Stripe's changelog.
+
+**Result:** 22 → 1. The remaining one is `deepmerge-ts` < 8, pinned exactly
+by `@prisma/config`. The fix is a major, and its only input is our own
+`prisma.config.ts` — never request data — so it is not reachable by an
+attacker. It resolves when Prisma bumps it.
+
+---
+
 ## Open decisions
 
 | Question | Status |
