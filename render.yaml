@@ -19,9 +19,12 @@ services:
     dockerfilePath: ./Dockerfile
     plan: free
     region: frankfurt
-    # /health/ready answers 503 while the database or Redis is unreachable,
-    # so a broken deploy never receives traffic.
-    healthCheckPath: /health/ready
+    # Liveness only: "is the process up". NOT /health/ready — Render calls
+    # this every few seconds, and a check that queries the database kept
+    # Neon's compute awake around the clock until the free monthly quota ran
+    # out and Neon paused the project (2026-09-23). A database outage is not
+    # something a restart can fix anyway; restarting only added a crash loop.
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production

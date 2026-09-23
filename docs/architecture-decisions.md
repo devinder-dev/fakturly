@@ -976,6 +976,44 @@ scope decision, not an oversight, and each is the next thing to build.
 
 ---
 
+## 51. Liveness never touches the database, and every dependency has a timeout
+
+**Context:** on 2026-09-23 the live API stopped answering. TLS worked; no
+response ever came back. The cause was three reasonable choices adding up:
+
+1. Render's health check was `/health/ready`, which runs `SELECT 1`, and
+   Render calls it every few seconds.
+2. UptimeRobot kept the Render service awake so the nightly demo reset runs.
+3. Neon's free plan has a monthly compute quota and only stops spending it
+   after 5 idle minutes — which, with (1) and (2), never happened.
+
+Seventeen days after launch the quota ran out and Neon paused the project.
+Render then restarted the app on failed health checks, and each restart
+died in `prisma migrate deploy`. Meanwhile nothing in the request path had a
+timeout, so requests did not fail — they hung.
+
+**Decision:**
+
+| Change | Why |
+|---|---|
+| Render's health check and the pinger use `/health` | Liveness asks "is the process up". It must not cost database compute, and a restart cannot fix a database outage anyway |
+| `/health` is exempt from rate limiting | The limiter lives in Redis; liveness must not depend on it |
+| pg: `connectionTimeoutMillis` 5 s, `statement_timeout` 15 s | pg's default is to wait forever. Verified: against an unreachable host the old code hung until killed, the new code fails in 5.0 s |
+| ioredis: `connectTimeout` 3 s, `commandTimeout` 2 s on the app connection | Every request passes the limiter; a Redis outage cost 30–40 s per request. Not on BullMQ's connections, which block by design |
+| Fastify `requestTimeout` 30 s | The last-resort cap for anything the driver timeouts miss |
+| `/health/ready` capped at 3 s as a whole | A readiness check that hangs tells the caller nothing |
+| `buildApp()` failures are caught and logged in `server.ts` | A dead dependency at boot reads as one clear line, not an unhandled rejection |
+
+**Trade-off:** Render no longer notices a database outage by itself. That is
+the point — it could only answer one with restarts. `/health/ready` still
+exists for a human or a monitor that should check the whole stack, at a
+frequency that lets Neon sleep (UptimeRobot on `/health/ready` every 5
+minutes is exactly the mistake; once an hour is fine).
+
+**Lesson:** on a metered free tier, the monitoring is part of the bill.
+
+---
+
 ## Open decisions
 
 | Question | Status |

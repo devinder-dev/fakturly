@@ -20,6 +20,19 @@ export const redis = new Redis(env.REDIS_URL, {
   // We would rather get a clear error quickly than have a request hang.
   maxRetriesPerRequest: 3,
 
+  // Every request passes the rate limiter, which talks to Redis — so a slow
+  // Redis is a slow API. Without these, a Redis outage made each request
+  // wait out ioredis' reconnect cycle (30-40 s) before failing.
+  //   connectTimeout  give up on a TCP connect after 3 s (default 10 s)
+  //   commandTimeout  reject a command with no reply after 2 s. It also
+  //                   covers commands queued while disconnected, so an
+  //                   outage fails fast instead of piling up requests.
+  // Safe on THIS connection only: nothing here issues blocking commands.
+  // BullMQ's connections (jobs/queues.ts) block by design and must not
+  // get a commandTimeout.
+  connectTimeout: 3_000,
+  commandTimeout: 2_000,
+
   // Backoff: wait longer and longer between reconnection attempts, capped at
   // 2 seconds. Without a cap we end up in a tight loop hammering a Redis
   // instance that is down.

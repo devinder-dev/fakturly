@@ -71,6 +71,14 @@ migrations on every start (`docker-entrypoint.sh`).
 > runs no cron. Either keep it awake with an external ping every 10 minutes
 > (cron-job.org, UptimeRobot), or run `bun run seed:demo` from the Render
 > shell before showing the demo. For a free tier the ping is the honest option.
+>
+> **Ping `/health`, never `/health/ready`.** `/health/ready` runs a database
+> query. Neon's free plan has a monthly compute quota and only stops using it
+> when the database has been idle for 5 minutes. A pinger on `/health/ready`
+> (or Render's health check pointed there, which fires every few seconds)
+> keeps the compute awake 24/7. That is exactly how the live demo went down on
+> 2026-09-23: Neon paused the project for the rest of the month. `/health`
+> touches nothing but the process, so Render stays awake and Neon still sleeps.
 
 ## 3. Frontend — Vercel
 
