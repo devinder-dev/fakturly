@@ -976,6 +976,70 @@ scope decision, not an oversight, and each is the next thing to build.
 
 ---
 
+## 51. Liveness never touches the database, and every dependency has a timeout
+
+**Context:** on 2026-09-23 the live API stopped answering. TLS worked; no
+response ever came back. The cause was three reasonable choices adding up:
+
+1. Render's health check was `/health/ready`, which runs `SELECT 1`, and
+   Render calls it every few seconds.
+2. UptimeRobot kept the Render service awake so the nightly demo reset runs.
+3. Neon's free plan has a monthly compute quota and only stops spending it
+   after 5 idle minutes — which, with (1) and (2), never happened.
+
+Seventeen days after launch the quota ran out and Neon paused the project.
+Render then restarted the app on failed health checks, and each restart
+died in `prisma migrate deploy`. Meanwhile nothing in the request path had a
+timeout, so requests did not fail — they hung.
+
+**Decision:**
+
+| Change | Why |
+|---|---|
+| Render's health check and the pinger use `/health` | Liveness asks "is the process up". It must not cost database compute, and a restart cannot fix a database outage anyway |
+| `/health` is exempt from rate limiting | The limiter lives in Redis; liveness must not depend on it |
+| pg: `connectionTimeoutMillis` 5 s, `statement_timeout` 15 s | pg's default is to wait forever. Verified: against an unreachable host the old code hung until killed, the new code fails in 5.0 s |
+| ioredis: `connectTimeout` 3 s, `commandTimeout` 2 s on the app connection | Every request passes the limiter; a Redis outage cost 30–40 s per request. Not on BullMQ's connections, which block by design |
+| Fastify `requestTimeout` 30 s | The last-resort cap for anything the driver timeouts miss |
+| `/health/ready` capped at 3 s as a whole | A readiness check that hangs tells the caller nothing |
+| `buildApp()` failures are caught and logged in `server.ts` | A dead dependency at boot reads as one clear line, not an unhandled rejection |
+
+**Trade-off:** Render no longer notices a database outage by itself. That is
+the point — it could only answer one with restarts. `/health/ready` still
+exists for a human or a monitor that should check the whole stack, at a
+frequency that lets Neon sleep (UptimeRobot on `/health/ready` every 5
+minutes is exactly the mistake; once an hour is fine).
+
+**Lesson:** on a metered free tier, the monitoring is part of the bill.
+
+---
+
+## 52. Dependency updates: in-range by default, overrides only within a major
+
+**Context:** `bun audit` on 2026-09-23 reported 22 known vulnerabilities in
+the backend (9 high). The ones that mattered were in `fastify` < 5.12.1,
+including an `X-Forwarded-*` spoofing bug under `trustProxy` — the exact
+feature ADR 50 had to work around.
+
+**Decision:**
+
+- `bun update` — minor and patch versions inside the existing `^` ranges.
+  Major versions (ioredis 6, Sentry 11, TypeScript 7, Prisma 8) are left for
+  their own change: a major is the maintainer saying "this may break you".
+- Transitive packages still pinned to a vulnerable version by their parent
+  are forced with `overrides` — **only within the same major**: `fast-uri`
+  ^3.1.6, `find-my-way` ^9.7.0, `mysql2` ^3.24.4.
+- **Stripe stays on `~22.5.0`.** 22.6 moves the pinned API version, and the
+  SDK had no vulnerability. A payment API change does not ride along with a
+  security fix; it gets its own change and a read of Stripe's changelog.
+
+**Result:** 22 → 1. The remaining one is `deepmerge-ts` < 8, pinned exactly
+by `@prisma/config`. The fix is a major, and its only input is our own
+`prisma.config.ts` — never request data — so it is not reachable by an
+attacker. It resolves when Prisma bumps it.
+
+---
+
 ## Open decisions
 
 | Question | Status |

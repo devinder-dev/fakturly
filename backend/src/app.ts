@@ -7,6 +7,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import cookie from '@fastify/cookie'
 import { isProduction, isTest } from './lib/env.ts'
 import { clientIp } from './lib/clientIp.ts'
+import { withTimeout } from './lib/timeout.ts'
 import corsPlugin from './plugins/cors.ts'
 import errorHandlerPlugin from './plugins/errorHandler.ts'
 import prismaPlugin from './plugins/prisma.ts'
@@ -66,7 +67,14 @@ export async function buildApp(): Promise<FastifyInstance> {
     // address: X-Forwarded-For here begins with whatever the client sent
     // (see /health/whoami), so anything security-relevant reads the address
     // through lib/clientIp.ts instead.
-    trustProxy: isProduction
+    trustProxy: isProduction,
+
+    // Last-resort cap: a request still unanswered after 30 s is cut off with
+    // a 408. Fastify's default is 0 (no limit), so one handler stuck on a
+    // dead dependency held its socket open indefinitely. The database and
+    // Redis clients have their own, shorter timeouts; this catches anything
+    // they miss. 30 s leaves room for the slowest legitimate request (a PDF).
+    requestTimeout: 30_000
   })
 
   // Error handler FIRST. Registered after the routes, Fastify would use its
@@ -97,7 +105,17 @@ export async function buildApp(): Promise<FastifyInstance> {
   // (rate limiting, error handling) from its very first request.
 
   // Liveness check — is the process alive?
-  app.get('/health', async () => {
+  //
+  // This is what Render's health check and the uptime pinger call, and it
+  // must stay dependency-free. Until 2026-09-23 they called /health/ready,
+  // which runs a query: a check every few seconds kept Neon's compute awake
+  // 24/7, the free monthly quota ran out, Neon paused the database, and the
+  // API went down. A liveness probe that touches the database both costs
+  // money and turns a database outage into a restart loop.
+  //
+  // rateLimit: false — the rate limiter lives in Redis, and "is the process
+  // alive" must not depend on Redis being up. Nothing here is worth abusing.
+  app.get('/health', { config: { rateLimit: false } }, async () => {
     return { status: 'ok', service: 'fakturly-backend' }
   })
 
@@ -108,8 +126,16 @@ export async function buildApp(): Promise<FastifyInstance> {
     try {
       // SELECT 1 is the cheapest possible query — we are testing that the
       // connection works, not that any particular table exists.
-      await app.prisma.$queryRaw`SELECT 1`
-      await app.redis.ping()
+      //
+      // Capped at 3 s as a whole: a readiness check that hangs is worse than
+      // one that says no, because whoever is asking learns nothing.
+      await withTimeout(
+        (async () => {
+          await app.prisma.$queryRaw`SELECT 1`
+          await app.redis.ping()
+        })(),
+        3_000
+      )
       return { status: 'ready', database: 'up', redis: 'up' }
     } catch (err) {
       app.log.error(err, 'Readiness check failed')

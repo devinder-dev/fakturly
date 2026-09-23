@@ -7,6 +7,7 @@
 import { initSentry } from './lib/sentry.ts'
 initSentry()
 
+import type { FastifyInstance } from 'fastify'
 import { buildApp } from './app.ts'
 import { env } from './lib/env.ts'
 import { startBackgroundJobs, stopBackgroundJobs } from './jobs/scheduler.ts'
@@ -14,7 +15,18 @@ import { closeQueues } from './jobs/queues.ts'
 
 // await: buildApp finishes loading plugins before declaring routes,
 // otherwise routes get registered before the plugins' hooks exist.
-const app = await buildApp()
+//
+// Caught, because this is where an unreachable database or Redis fails
+// (prisma.$connect and redis.ping run inside plugins). Uncaught, it surfaced
+// as an unhandled rejection; this way the log says plainly what failed, and
+// the exit code tells the host to try again later.
+let app: FastifyInstance
+try {
+  app = await buildApp()
+} catch (err) {
+  console.error('[server] startup failed — is the database or Redis reachable?', err)
+  process.exit(1)
+}
 
 /**
  * Background jobs run in the same process as the API, for now.
