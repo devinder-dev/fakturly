@@ -22,6 +22,8 @@ RUN bun install --frozen-lockfile --production
 # config, and nothing else yet.
 COPY prisma ./prisma
 COPY prisma.config.ts ./
+# prisma.config.ts imports this helper to build the migration URL.
+COPY src/lib/databaseTls.ts ./src/lib/databaseTls.ts
 # `generate` never opens a connection, but prisma.config.ts resolves
 # DATABASE_URL at load time and refuses to run without it. A placeholder
 # satisfies the config; it exists only in this build stage and never
@@ -39,6 +41,10 @@ COPY --from=install /app/src/generated ./src/generated
 COPY package.json prisma.config.ts ./
 COPY prisma ./prisma
 COPY src ./src
+# Public CA certificates the database connection is verified against
+# (DATABASE_CA_CERT). Public by nature — a CA certificate proves identity,
+# it grants nothing.
+COPY certs ./certs
 COPY docker-entrypoint.sh ./
 
 # Run as the unprivileged user the base image provides. A process that does

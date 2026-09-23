@@ -10,11 +10,20 @@
 
 import 'dotenv/config' // loads backend/.env into process.env
 import { z } from 'zod'
+import { urlHasTlsParams } from './databaseTls.ts'
 
 const envSchema = z.object({
   // Database and cache — required, the app cannot do anything without them
   DATABASE_URL: z.url(),
   REDIS_URL: z.url(),
+
+  /**
+   * Path to the CA certificate the database's TLS certificate must chain to.
+   * Needed for Supabase, whose CA is private (see lib/databaseTls.ts). Unset
+   * for local Docker, which has no TLS, and for hosts with a publicly trusted
+   * certificate, where `sslmode` in the URL is enough.
+   */
+  DATABASE_CA_CERT: z.string().min(1).optional(),
 
   // Auth — at least 32 characters. A short secret can be guessed or brute-forced.
   JWT_SECRET: z.string().min(32, 'JWT_SECRET måste vara minst 32 tecken'),
@@ -144,7 +153,29 @@ const envSchema = z.object({
  * deployed, rather than at the first customer payment.
  */
 const envSchemaWithProductionRules = envSchema.superRefine((value, ctx) => {
+  // In every environment: a CA file plus ssl* URL parameters means the URL
+  // silently wins and the CA is ignored. Refuse rather than guess.
+  if (value.DATABASE_CA_CERT && urlHasTlsParams(value.DATABASE_URL)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['DATABASE_URL'],
+      message: 'DATABASE_URL får inte innehålla ssl*-parametrar när DATABASE_CA_CERT är satt'
+    })
+  }
+
   if (value.NODE_ENV !== 'production') return
+
+  // Production traffic crosses the internet: without TLS, the database
+  // password and every query travel in clear text. Either the URL asks for
+  // TLS (a host with a public certificate) or we verify against a CA file.
+  if (!value.DATABASE_CA_CERT && !urlHasTlsParams(value.DATABASE_URL)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['DATABASE_URL'],
+      message:
+        'Databasanslutningen saknar TLS i produktion — sätt DATABASE_CA_CERT eller sslmode i URL:en'
+    })
+  }
 
   const required: Array<[keyof typeof value, string]> = [
     ['STRIPE_SECRET_KEY', 'betalningar skulle tyst sluta fungera'],

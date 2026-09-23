@@ -12,6 +12,7 @@
 import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '../generated/prisma/client.ts'
 import { env, isProduction, isTest } from './env.ts'
+import { pgSslOptions } from './databaseTls.ts'
 
 // The adapter owns the actual Postgres connection pool (pg.Pool).
 //
@@ -27,8 +28,12 @@ import { env, isProduction, isTest } from './env.ts'
 //                            pg's default, spelled out because it matters:
 //                            Neon only sleeps (and stops billing compute)
 //                            once no connection is open.
+//
+// ssl: verified against DATABASE_CA_CERT when set (Supabase); otherwise
+// undefined and the URL's own sslmode decides (see lib/databaseTls.ts).
 const adapter = new PrismaPg({
   connectionString: env.DATABASE_URL,
+  ssl: pgSslOptions(env.DATABASE_URL, env.DATABASE_CA_CERT),
   connectionTimeoutMillis: 5_000,
   statement_timeout: 15_000,
   idleTimeoutMillis: 10_000
