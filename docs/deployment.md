@@ -5,7 +5,7 @@ Three pieces, three hosts, all on free tiers:
 | Piece | Host | Why this one |
 |---|---|---|
 | API + Redis | **Render** (Docker, Frankfurt) | Runs the `Dockerfile` as is, has managed Redis, health-checks before routing traffic |
-| PostgreSQL | **Neon** (or Supabase) | Render's free database expires after 90 days; Neon's does not |
+| PostgreSQL | **Supabase** (or Neon) | Render's free database expires after 90 days; Supabase's free compute has no hourly quota |
 | Frontend | **Vercel** | Static files with a CDN; one rewrite rule for the SPA |
 
 The demo deployment runs with `DEMO_MODE=true`, which publishes the demo
@@ -14,18 +14,40 @@ deployment leaves it off — the route then does not exist at all.
 
 ---
 
-## 1. Database — Neon
+## 1. Database — Supabase
 
-1. neon.tech → New project → region **Frankfurt** (closest to Render's).
-2. Copy the connection string. It looks like
-   `postgresql://user:pass@ep-...eu-central-1.aws.neon.tech/neondb?sslmode=require`.
+Moved from Neon on 2026-09-23 (ADR 51, 53): Neon's free plan meters compute
+hours, Supabase's free compute is always on with no hourly quota.
 
-That is `DATABASE_URL`. Nothing else to do: the API applies its own
-migrations on every start (`docker-entrypoint.sh`).
+1. supabase.com → New project. Pick the European region closest to Render
+   (Frankfurt if offered; the live demo runs on `eu-west-1`, Ireland — about
+   20 ms further away, irrelevant at demo scale).
+2. **Connect → Session pooler.** Copy that string — **port 5432**:
+   `postgresql://postgres.<ref>:<password>@aws-1-<region>.pooler.supabase.com:5432/postgres`
 
-> Supabase works the same way. Use the **session pooler** connection string
-> (port 5432), not the transaction pooler — Prisma migrations need session
-> semantics.
+   | Not this | Why |
+   |---|---|
+   | Direct connection (`db.<ref>.supabase.co`) | IPv6 only on the free plan; Render has no outbound IPv6 |
+   | Transaction pooler (port **6543**) | No session semantics: `prisma migrate deploy`'s advisory lock fails |
+
+3. Paste it into Render as `DATABASE_URL` **exactly as copied — no
+   `?sslmode=...`**. TLS is configured by `DATABASE_CA_CERT` (already in
+   `render.yaml`), and an `sslmode` in the URL would override the CA; the
+   API refuses to start in that case rather than connect unverified.
+
+Why a CA file at all: Supabase's certificates chain to its own root, which no
+system trusts, so a plain `sslmode=require` either fails (the app) or
+connects *without checking the certificate* (the migration CLI). The root is
+committed at `backend/certs/supabase-prod-ca-2021.crt`, SHA-256
+`80:70:25:AD:50:D4:ED:21:9D:2C:9C:7D:29:9C:00:4F:82:4E:B0:0C:F7:F6:5A:FE:F6:07:D0:7B:72:E6:CA:FA`.
+
+> **Free-tier caveat:** Supabase pauses a free project after about a week
+> with no database activity. The daily cron jobs (overdue check, demo reset)
+> query it every day, which counts. If it is ever paused: dashboard →
+> project → **Restore**. Data is kept.
+>
+> **Neon still works** — set `DATABASE_URL` with its `?sslmode=require` and
+> *remove* `DATABASE_CA_CERT`; Neon's certificate is publicly trusted.
 
 ## 2. API — Render
 
@@ -48,7 +70,7 @@ migrations on every start (`docker-entrypoint.sh`).
    deliberately, so a demo cannot go live with payments silently disabled.
 
 3. Deploy. The first start runs `prisma migrate deploy` against the empty
-   Neon database, then listens. Watch the logs for
+   database, then listens. Watch the logs for
    `[scheduler] DEMO MODE — nightly reset scheduled`.
 
 4. Seed the demo data once. Render → the service → **Shell**:
@@ -126,7 +148,8 @@ file is the reference. The ones that matter for a deploy:
 
 | Variable | Required in production | Notes |
 |---|---|---|
-| `DATABASE_URL` | yes | Neon/Supabase, with `sslmode=require` |
+| `DATABASE_URL` | yes | Supabase session pooler (port 5432), no `ssl*` parameters — or Neon with `sslmode=require` |
+| `DATABASE_CA_CERT` | Supabase | Path to the CA the database certificate must chain to; `certs/supabase-prod-ca-2021.crt` (set in `render.yaml`) |
 | `REDIS_URL` | yes | Render wires it |
 | `JWT_SECRET` | yes, ≥ 32 chars | Render generates it |
 | `FRONTEND_URL` | yes | CORS allowlist and links in emails |

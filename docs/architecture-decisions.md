@@ -1040,6 +1040,52 @@ attacker. It resolves when Prisma bumps it.
 
 ---
 
+## 53. Supabase, with TLS verified against its own CA — tested, not assumed
+
+**Context:** after ADR 51 the database moved from Neon to Supabase: back
+online the same day instead of at the next billing cycle, and free compute
+with no hourly quota. Supabase's certificates chain to a private root
+("Supabase Root 2021 CA"), so TLS needs that CA — and the app's `pg` pool and
+the Prisma CLI (`migrate deploy`) read TLS settings differently.
+
+**How it was tested without a password:** TLS completes before
+authentication, so connecting as a *non-existent* tenant separates the two —
+"tenant not found" means the certificate was accepted. Nothing touched the
+real project, and no failed logins counted against it.
+
+| Consumer | Setting | Right CA | Wrong CA | Wrong host |
+|---|---|---|---|---|
+| pg | `sslmode=require` in URL, no CA | rejected | | |
+| pg | `ssl: { ca }` | ✅ | rejected | rejected |
+| pg | `ssl: { ca }` **and** `sslmode` in URL | rejected — the URL replaces the CA | | |
+| Prisma CLI | `sslmode=require` | connects **without checking** | | |
+| Prisma CLI | `sslmode=verify-full&sslrootcert=` | ✅ | **accepted** | — |
+| Prisma CLI | `sslmode=require&sslaccept=strict&sslcert=` | ✅ | rejected | rejected |
+
+Prisma CLI rows measured in the production image (Linux); on macOS the strict
+mode rejects even the right CA. The `verify-full` row is the one that would
+have shipped on a positive test alone — it only showed up by also testing a
+wrong CA.
+
+**Decision:**
+
+- The root CA is committed at `backend/certs/`, fetched from Supabase's
+  download URL over HTTPS and matched against the root the server presents
+  (SHA-256 `80:70:25:AD…E6:CA:FA`).
+- `DATABASE_URL` stays exactly as Supabase gives it; `DATABASE_CA_CERT` names
+  the CA. `lib/databaseTls.ts` derives `ssl: { ca }` for the pool and the
+  `sslaccept=strict&sslcert=` URL for the CLI.
+- Fail closed: production refuses to boot without TLS on the database, and
+  every environment refuses a CA plus `ssl*` URL parameters.
+- Session pooler, port 5432: the direct host is IPv6-only on the free plan
+  (Render has no IPv6 egress), and the transaction pooler breaks the
+  migration lock.
+
+**Trade-off:** Supabase pauses a free project after about a week without
+database activity. The daily cron jobs are that activity; `/health` is not.
+
+---
+
 ## Open decisions
 
 | Question | Status |
