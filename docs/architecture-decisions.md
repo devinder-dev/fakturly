@@ -1086,6 +1086,40 @@ database activity. The daily cron jobs are that activity; `/health` is not.
 
 ---
 
+## 54. Supabase's Data API is locked out: RLS everywhere, no grants to anon
+
+**Context:** Supabase publishes every table in `public` through its REST
+"Data API" (PostgREST) and, by default, grants the `anon` and `authenticated`
+roles full access to new tables. The anon key is public by design — Supabase
+expects it in browser code, with Row Level Security as the protection.
+
+Checked right after the first migration on 2026-09-23: all 12 tables had RLS
+off and `anon` could SELECT and INSERT. With the project's anon key, anyone
+could have read `User` (password hashes) and `RefreshToken`, or appended rows
+to `Transaction` — the append-only ledger (ADR 2) that is only written through the
+service layer — without touching our API. Fakturly never uses the Data API.
+
+**Decision:** migration `20260923160000_lock_down_supabase_data_api`:
+
+- RLS enabled on every table, **no policies** — deny for any role that does
+  not bypass RLS. The app connects as `postgres` (BYPASSRLS) on Supabase and
+  as the table owner elsewhere, so it is unaffected.
+- `REVOKE ALL` on tables, sequences and functions from `anon` and
+  `authenticated`, plus `ALTER DEFAULT PRIVILEGES` so future tables start
+  closed. Guarded by the roles existing, so plain Postgres (local, CI) skips it.
+- `tests/integration/rls.test.ts` fails if any table lacks RLS, so the next
+  migration cannot quietly reopen this. Shown to fail before the migration
+  (listing all 12 tables) and pass after.
+
+**Verified on Supabase:** every table `rls = true`, anon/authenticated
+privileges `false`; a table created afterwards (inside a rolled-back
+transaction) is not granted to either role; the app still reads its data.
+
+**Also recommended, outside the code:** switch the Data API off in the
+Supabase dashboard. Two locks, either one sufficient.
+
+---
+
 ## Open decisions
 
 | Question | Status |
