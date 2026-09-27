@@ -65,9 +65,16 @@ export async function issuePasswordToken(
   return { token, expiresAt }
 }
 
-/** Builds the link that goes in the email. */
+/**
+ * Builds the link that goes in the email.
+ *
+ * The token rides in the FRAGMENT (#token=), not the query string. Browsers
+ * never send the fragment to any server: a ?token= reached Vercel's access
+ * logs with the page request, and sat in history and Referer headers. The
+ * page reads it from location.hash and wipes it from the address bar.
+ */
 export function buildSetPasswordUrl(token: string): string {
-  return `${env.FRONTEND_URL}/set-password?token=${encodeURIComponent(token)}`
+  return `${env.FRONTEND_URL}/set-password#token=${encodeURIComponent(token)}`
 }
 
 /**

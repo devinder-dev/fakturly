@@ -40,7 +40,13 @@ const envSchema = z.object({
 
   // App. coerce: "3000" arrives as a string, we want a number.
   PORT: z.coerce.number().int().positive().default(3000),
-  FRONTEND_URL: z.url().default('http://localhost:5173'),
+  // Trailing slashes stripped: the browser's Origin header never has one,
+  // so "https://x.app/" would fail the CORS and same-origin checks with an
+  // error that looks like anything but a typo.
+  FRONTEND_URL: z
+    .url()
+    .transform((url) => url.replace(/\/+$/, ''))
+    .default('http://localhost:5173'),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
   // Week 3 — allowed to be empty for now. .optional() means the key need not
@@ -163,7 +169,30 @@ const envSchemaWithProductionRules = envSchema.superRefine((value, ctx) => {
     })
   }
 
+  // Demo mode publishes admin credentials at GET /demo and wipes every table
+  // nightly. With a live Stripe key, anonymous visitors could open real
+  // checkout sessions. Checked in every environment: the combination is
+  // wrong everywhere. (sk_ = secret key, rk_ = restricted key.)
+  if (value.DEMO_MODE && /^(sk|rk)_live_/.test(value.STRIPE_SECRET_KEY ?? '')) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['STRIPE_SECRET_KEY'],
+      message: 'DEMO_MODE får aldrig köras med en live-nyckel från Stripe — använd sk_test_'
+    })
+  }
+
   if (value.NODE_ENV !== 'production') return
+
+  // In production the frontend is a real, public https origin. The default
+  // (localhost) or plain http here means the variable was forgotten, and
+  // the symptom — every browser request failing CORS — points elsewhere.
+  if (!value.FRONTEND_URL.startsWith('https://')) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['FRONTEND_URL'],
+      message: 'FRONTEND_URL måste vara en https-adress i produktion (saknas den?)'
+    })
+  }
 
   // Production traffic crosses the internet: without TLS, the database
   // password and every query travel in clear text. Either the URL asks for

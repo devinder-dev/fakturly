@@ -21,6 +21,7 @@ export type ErrorCode =
   | 'NOT_FOUND'
   | 'CONFLICT'
   | 'RATE_LIMITED'
+  | 'SERVICE_BUSY'
   | 'BUSINESS_RULE'
   | 'INTERNAL_ERROR'
 
@@ -149,6 +150,26 @@ export class RateLimitError extends AppError {
     // which HTTP clients understand automatically) and in the body (so a
     // frontend can render "try again in 42 seconds" without reading headers).
     super('För många försök. Försök igen senare.', 429, 'RATE_LIMITED', {
+      details: { retryAfterSeconds }
+    })
+    this.retryAfterSeconds = retryAfterSeconds
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// 503 — we are busy, not you
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * The server is at capacity for some expensive operation (password hashing,
+ * see lib/concurrency.ts). Different from 429: the caller did nothing wrong,
+ * and the right response is a short wait, not a slowdown.
+ */
+export class ServiceBusyError extends AppError {
+  readonly retryAfterSeconds: number
+
+  constructor(retryAfterSeconds: number) {
+    super('Tjänsten är tillfälligt hårt belastad. Försök igen om en stund.', 503, 'SERVICE_BUSY', {
       details: { retryAfterSeconds }
     })
     this.retryAfterSeconds = retryAfterSeconds

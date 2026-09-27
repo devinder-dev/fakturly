@@ -3,19 +3,42 @@
 // The token arrives in the URL, because that is the only way an email link
 // can carry it. We read it, then send it in the request BODY — the API takes
 // it there deliberately, so it does not end up in server access logs.
+//
+// It arrives in the FRAGMENT (#token=), which browsers never send to any
+// server — a ?token= reached the hosting provider's logs with the page load.
+// Links sent before that change used the query string and are still read,
+// until they expire on their own (7 days at most).
 
-import { useState, type FormEvent } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useEffect, useState, type FormEvent } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, ApiError } from '../lib/api.ts'
 import { Button, Field, Card } from '../components/ui.tsx'
+
+/** Reads the token from the fragment, or the query string of an older link. No side effects. */
+function readTokenFromUrl(): string | null {
+  const fromFragment = new URLSearchParams(window.location.hash.slice(1)).get('token')
+  const fromQuery = new URLSearchParams(window.location.search).get('token')
+  return fromFragment ?? fromQuery
+}
 
 /** Mirrors the backend policy, so a user is told before a round trip. */
 const MIN_LENGTH = 12
 
 export function SetPasswordPage() {
-  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  const token = searchParams.get('token')
+  // useState keeps the token after the URL is cleaned below; a plain call
+  // would read the now-empty URL on the next render.
+  const [token] = useState(readTokenFromUrl)
+
+  // Then wipe it from the address bar. replaceState rewrites the current
+  // history entry, so the token is not left in history or visible over a
+  // shoulder. In an effect, not the initialiser: StrictMode runs initialisers
+  // twice in development, and the second run would find the URL already empty.
+  useEffect(() => {
+    if (window.location.hash || window.location.search) {
+      window.history.replaceState(window.history.state, '', window.location.pathname)
+    }
+  }, [])
 
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')

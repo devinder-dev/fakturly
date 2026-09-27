@@ -12,7 +12,7 @@
 // find out from a customer.
 
 import { Resend } from 'resend'
-import { env, isTest } from './env.ts'
+import { env, isProduction, isTest } from './env.ts'
 
 export type EmailMessage = {
   to: string
@@ -70,6 +70,18 @@ async function sendViaResend(message: EmailMessage): Promise<SendResult> {
   }
 }
 
+/**
+ * What the console transport may print.
+ *
+ * Locally the printed link IS the way to finish an invite, so it is shown in
+ * full. In production (the demo on Render runs this transport) the log is a
+ * third party's storage: a set-password token there is a standing key to the
+ * account for anyone with log access. Redact it.
+ */
+export function printableBody(text: string, production: boolean = isProduction): string {
+  return production ? text.replace(/token=[^\s&#]+/g, 'token=[REDACTED]') : text
+}
+
 function sendViaConsole(message: EmailMessage): SendResult {
   if (!isTest) {
     console.log(
@@ -79,7 +91,7 @@ function sendViaConsole(message: EmailMessage): SendResult {
         `│ To:      ${message.to}`,
         `│ Subject: ${message.subject}`,
         '├─────────────────────────────────────────────────────────────',
-        message.text
+        printableBody(message.text)
           .split('\n')
           .map((line) => `│ ${line}`)
           .join('\n'),
