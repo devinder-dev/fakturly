@@ -1120,6 +1120,35 @@ Supabase dashboard. Two locks, either one sufficient.
 
 ---
 
+## 55. Hardening, round two — what the post-outage audit found
+
+**Context:** the audit after the 2026-09-23 outage (ADR 51) found no
+critical issues, and a set of medium and low ones. None was being
+exploited; each was cheap to close.
+
+| Finding | Fix |
+|---|---|
+| `/health/whoami` public in production: a live test bench for which forged header moves your rate-limit bucket | Removed. It did its job (ADR 50); the ADR keeps the lesson |
+| With `CLIENT_IP_HEADER` set but the header absent, `clientIp` fell back to `request.ip` — read from client-written `X-Forwarded-For` | Falls back to the TCP peer (`socket.remoteAddress`), which cannot be forged |
+| IPv6 rate-limit buckets per full address: one subscriber's /64 is 2^64 buckets | Keyed per /64 (`rateLimitKey`); IPv4-mapped addresses fold to IPv4. Audit rows keep the full address |
+| Argon2id unbounded: logins from many IPs (invisible to the per-IP limit) could saturate a fraction-of-a-CPU instance | A gate: 2 at once, 20 waiting, then 503 + `Retry-After` (`ServiceBusyError`). Outside the `try` in `verifyPassword` — inside, "busy" would read as a wrong password and count against the account. The dummy verify uses the same gate, so timing still says nothing |
+| Nothing stopped `DEMO_MODE` with a live Stripe key | Refused at boot, any environment (`sk_live_`, `rk_live_`) |
+| `FRONTEND_URL` silently defaulted to localhost in production; a trailing slash broke CORS | https required in production; trailing slashes stripped |
+| Set-password tokens printed to Render's logs by the console mail transport | Redacted in production; printed in full locally, where the log is how an invite gets finished |
+| The set-password link carried the token in `?token=` — sent to Vercel with the page load, kept in history | Moved to the fragment (`#token=`), which browsers never send; the page wipes it from the address bar. Old `?token=` links still work until they expire |
+| Any error with a 4xx `statusCode` had its message forwarded — Stripe SDK errors carry 400 and name session ids | Only Fastify's own errors (`FST_…`) pass through; anything else is a 500, reported to Sentry |
+
+**Tests:** startup rules run `env.ts` in a child process per case
+(`env-rules.test.ts`), since it exits on failure. `SetPasswordPage.test.tsx`
+checks the token is read from the fragment and gone from the URL before the
+user types.
+
+**Found while testing:** three back-to-back e2e runs from localhost hit the
+login rate limit (5/min per IP, in Redis, so it outlives a run). The limiter
+working as designed; recorded because it will look like a flaky test next time.
+
+---
+
 ## Open decisions
 
 | Question | Status |

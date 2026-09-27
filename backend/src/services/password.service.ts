@@ -11,6 +11,7 @@ import type { Algorithm } from '@node-rs/argon2'
 import { randomBytes } from 'node:crypto'
 import { isPasswordBreached } from '../lib/hibp.ts'
 import { ValidationError } from '../lib/errors.ts'
+import { BoundedConcurrency } from '../lib/concurrency.ts'
 
 // ─────────────────────────────────────────────────────────────
 // Parameters — OWASP 2024 recommendation for Argon2id
@@ -103,8 +104,20 @@ function normalize(password: string): string {
  *
  * So verify() can read back exactly how this hash was produced.
  */
+// ─────────────────────────────────────────────────────────────
+// Concurrency cap
+// ─────────────────────────────────────────────────────────────
+//
+// Every hash and verify goes through one gate: at most 2 at once, 20 waiting,
+// the rest refused with 503 + Retry-After (lib/concurrency.ts). The free
+// instance has a fraction of a CPU; without this, a login burst from many
+// IPs — which the per-IP limit cannot see — stalls every other request.
+// The dummy verify for unknown emails goes through the same gate, so the
+// timing stays identical and says nothing about which accounts exist.
+const argon2Gate = new BoundedConcurrency(2, 20)
+
 export async function hashPassword(plainPassword: string): Promise<string> {
-  return argon2Hash(normalize(plainPassword), ARGON2_OPTIONS)
+  return argon2Gate.run(() => argon2Hash(normalize(plainPassword), ARGON2_OPTIONS))
 }
 
 /**
@@ -118,11 +131,16 @@ export async function verifyPassword(
   storedHash: string,
   plainPassword: string
 ): Promise<boolean> {
-  try {
-    return await argon2Verify(storedHash, normalize(plainPassword))
-  } catch {
-    return false
-  }
+  // The gate is OUTSIDE the try on purpose. Inside, a "busy" refusal would be
+  // swallowed as `false` — a wrong password — and counted as a failed login
+  // against the account. Busy must stay busy.
+  return argon2Gate.run(async () => {
+    try {
+      return await argon2Verify(storedHash, normalize(plainPassword))
+    } catch {
+      return false
+    }
+  })
 }
 
 /**

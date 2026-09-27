@@ -14,7 +14,7 @@
 // Layer 2 (services/loginAttempts.service.ts) covers that.
 
 import fp from 'fastify-plugin'
-import { clientIp } from '../lib/clientIp.ts'
+import { clientIp, rateLimitKey } from '../lib/clientIp.ts'
 import rateLimit from '@fastify/rate-limit'
 import type { FastifyInstance } from 'fastify'
 import { RateLimitError } from '../lib/errors.ts'
@@ -34,10 +34,10 @@ async function rateLimitPlugin(app: FastifyInstance) {
     max: 100,
     timeWindow: '1 minute',
 
-    // The key is the client IP. request.ip only respects X-Forwarded-For
-    // when trustProxy is on — which we enable in production. Without it,
-    // everyone behind a proxy would share ONE counter and lock each other out.
-    keyGenerator: (request) => clientIp(request),
+    // The key is the client's address as the edge reports it (lib/clientIp),
+    // widened to its /64 for IPv6 — otherwise one IPv6 subscriber holds
+    // 2^64 separate buckets and the limit means nothing.
+    keyGenerator: (request) => rateLimitKey(clientIp(request)),
 
     // NOTE: the plugin THROWS whatever errorResponseBuilder returns. Return a
     // plain object and it has no statusCode, so our central error handler

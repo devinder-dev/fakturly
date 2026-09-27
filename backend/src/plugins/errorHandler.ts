@@ -15,7 +15,7 @@ import fp from 'fastify-plugin'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { ZodError } from 'zod'
 import { Prisma } from '../generated/prisma/client.ts'
-import { AppError, RateLimitError, isAppError } from '../lib/errors.ts'
+import { AppError, RateLimitError, ServiceBusyError, isAppError } from '../lib/errors.ts'
 import { isProduction } from '../lib/env.ts'
 import { captureException } from '../lib/sentry.ts'
 
@@ -83,8 +83,8 @@ async function errorHandlerPlugin(app: FastifyInstance) {
         'Domain error'
       )
 
-      // A 429 must say WHEN the caller may try again.
-      if (error instanceof RateLimitError) {
+      // A 429 or 503 must say WHEN the caller may try again.
+      if (error instanceof RateLimitError || error instanceof ServiceBusyError) {
         reply.header('Retry-After', String(error.retryAfterSeconds))
       }
 
@@ -133,8 +133,13 @@ async function errorHandlerPlugin(app: FastifyInstance) {
     // ── 4. Fastify's own errors (body too large, malformed JSON, ...) ──
     // These already carry a sensible status code. A 4xx is the caller's
     // fault and its message is harmless; a 5xx we silence.
+    //
+    // Only FASTIFY's (code FST_...). Other libraries set statusCode too — a
+    // Stripe SDK error carries 400 and a message naming session ids and
+    // parameters. That is not the caller's mistake but ours, so it belongs
+    // in branch 5: logged, reported, and a generic 500 to the client.
     const fields = readErrorFields(error)
-    if (fields.statusCode >= 400 && fields.statusCode < 500) {
+    if (fields.statusCode >= 400 && fields.statusCode < 500 && fields.code.startsWith('FST_')) {
       app.log.warn({ err: error }, 'Client error')
       return send(reply, request, fields.statusCode, fields.code, fields.message)
     }

@@ -11,6 +11,7 @@ import {
   ForbiddenError,
   NotFoundError,
   RateLimitError,
+  ServiceBusyError,
   BusinessRuleError
 } from '../../src/lib/errors.ts'
 import { loginSchema } from '../../src/validators/auth.validator.ts'
@@ -37,6 +38,18 @@ beforeAll(async () => {
     instance.get('/_t/ratelimit', async () => {
       throw new RateLimitError(42)
     })
+    instance.get('/_t/busy', async () => {
+      throw new ServiceBusyError(1)
+    })
+    instance.get('/_t/library-4xx', async () => {
+      // The shape of a Stripe SDK error: a 4xx statusCode and a message
+      // that names our own internals.
+      throw Object.assign(new Error('No such checkout.session: cs_test_secret123'), {
+        statusCode: 400,
+        type: 'StripeInvalidRequestError'
+      })
+    })
+    instance.post('/_t/echo', async (request) => request.body)
     instance.get('/_t/business', async () => {
       throw new BusinessRuleError('En betald faktura kan inte krediteras')
     })
@@ -106,6 +119,36 @@ describe('rate limit errors', () => {
     expect(res.statusCode).toBe(429)
     expect(res.headers['retry-after']).toBe('42')
     expect(res.json().error.details.retryAfterSeconds).toBe(42)
+  })
+})
+
+describe('service busy', () => {
+  test('503 with a Retry-After header', async () => {
+    const res = await get('/_t/busy')
+    expect(res.statusCode).toBe(503)
+    expect(res.json().error.code).toBe('SERVICE_BUSY')
+    expect(res.headers['retry-after']).toBe('1')
+  })
+})
+
+describe('4xx from somewhere other than Fastify', () => {
+  test('🔑 a library error with a 4xx statusCode is our bug: 500, not forwarded as 400', async () => {
+    const res = await get('/_t/library-4xx')
+    expect(res.statusCode).toBe(500)
+    expect(res.json().error.code).toBe('INTERNAL_ERROR')
+    // (In production the message is generic too; development shows it on
+    // purpose — see branch 5 of the handler.)
+  })
+
+  test("Fastify's own 4xx still reaches the caller — malformed JSON is their mistake", async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/_t/echo',
+      headers: { 'content-type': 'application/json' },
+      payload: '{"broken":'
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error.code).toStartWith('FST_')
   })
 })
 

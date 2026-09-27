@@ -6,7 +6,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import cookie from '@fastify/cookie'
 import { isProduction, isTest } from './lib/env.ts'
-import { clientIp } from './lib/clientIp.ts'
 import { withTimeout } from './lib/timeout.ts'
 import corsPlugin from './plugins/cors.ts'
 import errorHandlerPlugin from './plugins/errorHandler.ts'
@@ -65,7 +64,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     // Kept on so `request.protocol` and `request.hostname` reflect the
     // original request behind Render's proxy. NOT relied on for the client
     // address: X-Forwarded-For here begins with whatever the client sent
-    // (see /health/whoami), so anything security-relevant reads the address
+    // (measured in ADR 50), so anything security-relevant reads the address
     // through lib/clientIp.ts instead.
     trustProxy: isProduction,
 
@@ -142,28 +141,6 @@ export async function buildApp(): Promise<FastifyInstance> {
       // 503 Service Unavailable — the right code when the app is alive but
       // cannot serve requests. Load balancers understand this one.
       return reply.code(503).send({ status: 'not_ready' })
-    }
-  })
-
-  /**
-   * GET /health/whoami — how the API sees the caller.
-   *
-   * Returns only the caller's OWN address and forwarding chain, the way
-   * ifconfig.me does. It exists because "which entry in X-Forwarded-For is
-   * the real client" depends on the proxy in front of the API, no two hosts
-   * agree, and the rate limiter and audit log key on the answer. The only
-   * honest way to configure trustProxy is to look at this from outside.
-   */
-  app.get('/health/whoami', async (request) => {
-    return {
-      /** What the rate limiter and audit log will use. */
-      ip: clientIp(request),
-      /** What Fastify's trustProxy reading gives. */
-      fastifyIp: request.ip,
-      forwardedFor: request.headers['x-forwarded-for'] ?? null,
-      cfConnectingIp: request.headers['cf-connecting-ip'] ?? null,
-      trueClientIp: request.headers['true-client-ip'] ?? null,
-      xRealIp: request.headers['x-real-ip'] ?? null
     }
   })
 

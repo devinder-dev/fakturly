@@ -268,11 +268,13 @@ describe('setting a password revokes existing sessions', () => {
 })
 
 describe('the emailed link', () => {
-  test('points at the frontend and carries the token', () => {
-    const url = buildSetPasswordUrl('abc-123_XYZ')
+  test('points at the frontend and carries the token in the fragment', () => {
+    const url = new URL(buildSetPasswordUrl('abc-123_XYZ'))
 
-    expect(url).toContain('/set-password?token=')
-    expect(url).toContain(encodeURIComponent('abc-123_XYZ'))
+    expect(url.pathname).toBe('/set-password')
+    expect(new URLSearchParams(url.hash.slice(1)).get('token')).toBe('abc-123_XYZ')
+    // Nothing in the part of the URL a browser sends to a server.
+    expect(url.search).toBe('')
   })
 
   test('the API takes the token in the BODY, not the query string', async () => {
