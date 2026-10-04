@@ -134,11 +134,18 @@ const ALLOWED_CENTURIES = new Set([18, 19, 20])
 /**
  * Parses any accepted written form of a personnummer or samordningsnummer.
  *
- * Never throws on bad input — returns a reason instead, because "the user
- * typed it wrong" is an expected outcome, not an exception.
+ * Never throws on a bad NUMBER — returns a reason instead, because "the user
+ * typed it wrong" is an expected outcome, not an exception. It does throw on
+ * an invalid `referenceDate`: a broken clock is a programming error, and
+ * silently parsing against it would infer the wrong century.
  */
 export function parsePersonnummer(input: string, options: PersonnummerOptions = {}): PersonnummerResult {
   const referenceDate = options.referenceDate ?? new Date()
+  // Without this, new Date('nonsense') surfaces as an opaque
+  // "RangeError: Invalid time value" from deep inside Intl.
+  if (!(referenceDate instanceof Date) || Number.isNaN(referenceDate.getTime())) {
+    throw new Error('parsePersonnummer: referenceDate must be a valid Date')
+  }
   const trimmed = input.trim()
 
   let twelve: string
@@ -277,13 +284,23 @@ export const MIN_PEPPER_BYTES = 32
  * it means recomputing every key from the plaintext number — which requires
  * having it stored encrypted (secretBox, phase 2) or re-linking users.
  */
-export function personnummerLookupKey(pnr: string, pepper: Uint8Array): string {
-  // A short pepper is a configuration bug, not bad user input — plain Error, 500.
-  if (pepper.byteLength < MIN_PEPPER_BYTES) {
-    throw new Error(`Personnummer pepper must be at least ${MIN_PEPPER_BYTES} bytes`)
+export function personnummerLookupKey(
+  pnr: string,
+  pepper: Uint8Array,
+  options: PersonnummerOptions = {}
+): string {
+  // A missing or short pepper is a configuration bug, not bad user input —
+  // plain Error, 500. The instanceof matters: a STRING has no byteLength,
+  // `undefined < 32` is false, and createHmac accepts a string key of any
+  // length — so a pepper read from env as text would sail past a length
+  // check alone. Buffer is a Uint8Array subclass and passes.
+  if (!(pepper instanceof Uint8Array) || pepper.byteLength < MIN_PEPPER_BYTES) {
+    throw new Error(`Personnummer pepper must be a Uint8Array of at least ${MIN_PEPPER_BYTES} bytes`)
   }
   // Normalise first, so 640823-3234 and 196408233234 give the same key.
-  const normalized = normalizePersonnummer(pnr)
+  // A 10-digit form depends on the clock (century inference), so callers
+  // that store keys should pass 12 digits — BankID returns 12.
+  const normalized = normalizePersonnummer(pnr, options)
   return createHmac('sha256', pepper).update(`${LOOKUP_KEY_PREFIX}${normalized}`).digest('hex')
 }
 

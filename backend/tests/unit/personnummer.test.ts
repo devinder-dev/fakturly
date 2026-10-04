@@ -1,11 +1,21 @@
 // personnummer.test.ts — parsing, century inference, samordningsnummer,
 // organisationsnummer and the stored lookup key.
 //
-// Every personnummer and samordningsnummer used below is either SKV 704's
-// own example or one of Skatteverket's published TEST numbers, which are
-// blocked from ever being issued to a real person. The few numbers that
-// cannot exist (30 February 1900, month 13) were computed for the
-// rejection tests and are marked as such.
+// Which numbers appear here — a personnummer belongs to a real person
+// unless Skatteverket has reserved it for testing:
+//
+//   - Every number a test expects to PARSE is SKV 704's example
+//     (640823-3234, itself a reserved test number) or one of Skatteverket's
+//     published test personnummer / samordningsnummer, which can never be
+//     issued to anyone.
+//   - Numbers a test expects to be REJECTED are those same numbers with a
+//     deliberate typo or an altered century, or computed impossibilities
+//     (month 13, day 45, 29 February 1900) — marked where they appear.
+//   - The '-' / '+' contrast tests use samordningsnummer: Skatteverket's
+//     data has 23 ten-digit sequences published under BOTH centuries, and
+//     all 23 are samordningsnummer. Century inference is the same code for
+//     both kinds.
+//   - Organisationsnummer are public register data, not personal data.
 
 import { describe, test, expect } from 'bun:test'
 import {
@@ -25,6 +35,7 @@ import { ValidationError } from '../../src/lib/errors.ts'
 // A fixed "now" — 15 June 2026, midday in Stockholm. Century inference and
 // the future check depend on the clock, so tests never use the real one.
 const MIDSUMMER_2026 = new Date('2026-06-15T10:00:00Z')
+const AT_MIDSUMMER = { referenceDate: MIDSUMMER_2026 }
 
 function parse(input: string, referenceDate = MIDSUMMER_2026) {
   return parsePersonnummer(input, { referenceDate })
@@ -45,15 +56,6 @@ describe('parsePersonnummer — SKV 704 example 640823-3234', () => {
       })
     }
   )
-
-  test("'+' means a century earlier — same ten digits, a different person", () => {
-    // The check digit covers only the ten written digits, so it is equally
-    // valid for 1864. The separator is the ONLY thing that tells them apart.
-    expect(parse('640823+3234')).toEqual({
-      ok: true,
-      value: { kind: 'personnummer', normalized: '186408233234', birthDate: '1864-08-23' }
-    })
-  })
 })
 
 describe('parsePersonnummer — Skatteverket open-data test numbers', () => {
@@ -73,11 +75,6 @@ describe('parsePersonnummer — Skatteverket open-data test numbers', () => {
     })
   })
 
-  test("the same digits with '-' are someone born in 1990", () => {
-    const result = parse('900101-9802')
-    expect(result.ok && result.value.normalized).toBe('199001019802')
-  })
-
   test('200002292399 — 29 February 2000 exists (divisible by 400)', () => {
     const result = parse('200002292399')
     expect(result.ok && result.value.birthDate).toBe('2000-02-29')
@@ -85,20 +82,37 @@ describe('parsePersonnummer — Skatteverket open-data test numbers', () => {
 })
 
 describe('century inference — by Stockholm calendar year', () => {
-  // Test number 202612312385. Its ten digits, 261231-2385, also fit 1926.
+  // The pairs below are samordningsnummer because those are the only
+  // ten-digit sequences Skatteverket has published under both centuries.
   const EARLY_2026 = new Date('2026-03-01T12:00:00Z')
 
-  test("'-' never reaches into the future: 261231-2385 in March 2026 is FUTURE", () => {
-    // '-' means "turns at most 99 this year", so this must be 2026 — and
-    // 31 December 2026 has not happened yet. It does NOT fall back to 1926.
-    expect(reasonFor('261231-2385', EARLY_2026)).toBe('FUTURE')
+  test('🔑 same ten digits, two people — only the separator tells them apart', () => {
+    // Test samordningsnummer 202501722397 and 192501722397 (12 January).
+    // The check digit covers only the ten written digits, so it is equally
+    // valid for both centuries.
+    expect(parse('250172-2397')).toEqual({
+      ok: true,
+      value: { kind: 'samordningsnummer', normalized: '202501722397', birthDate: '2025-01-12' }
+    })
+    expect(parse('250172+2397')).toEqual({
+      ok: true,
+      value: { kind: 'samordningsnummer', normalized: '192501722397', birthDate: '1925-01-12' }
+    })
+  })
+
+  test("'-' never reaches into the future: 261269-2380 in March 2026 is FUTURE", () => {
+    // Test samordningsnummer 202612692380 = 9 December 2026. '-' means
+    // "turns at most 99 this year", so this must be 2026 — and 9 December
+    // has not happened yet. It does NOT fall back to 1926.
+    expect(reasonFor('261269-2380', EARLY_2026)).toBe('FUTURE')
   })
 
   test("'+' applies from 1 January of the year the person turns 100", () => {
-    // Born 31 Dec 1926: still 99 in March 2026, but the law switches the
-    // sign "det år en person fyller 100 år" — the calendar year, not the birthday.
-    const result = parse('261231+2385', EARLY_2026)
-    expect(result.ok && result.value.birthDate).toBe('1926-12-31')
+    // Test samordningsnummer 192612692380: born 9 Dec 1926, still 99 in
+    // March 2026 — but the law switches the sign "det år en person fyller
+    // 100 år": the calendar year, not the birthday.
+    const result = parse('261269+2380', EARLY_2026)
+    expect(result.ok && result.value.normalized).toBe('192612692380')
   })
 
   test('a baby born last year is inferred as last year, not a century ago', () => {
@@ -107,22 +121,51 @@ describe('century inference — by Stockholm calendar year', () => {
     expect(result.ok && result.value.normalized).toBe('202512312386')
   })
 
-  test('🔑 Stockholm New Year: the same string is two people, 60 minutes apart', () => {
-    // Test number 202601012384, written 260101-2384.
-    // 23:30 UTC on 31 Dec = 00:30 on 1 Jan in Stockholm: it is 2026, so the
-    // number is a newborn. A server reading the UTC year would say 1926.
-    const afterMidnight = parse('260101-2384', new Date('2025-12-31T23:30:00Z'))
-    expect(afterMidnight.ok && afterMidnight.value.normalized).toBe('202601012384')
+  test('🔑 Stockholm New Year: the year flips at Stockholm midnight, not UTC midnight', () => {
+    // 22:30 UTC on 31 Dec = 23:30 in Stockholm: still 2025, so a 2026 birth
+    // is impossible and '-' (at most 99 this year) means 1926.
+    // Test samordningsnummer 192601762392 (16 January 1926).
+    const lateEvening = new Date('2025-12-31T22:30:00Z')
+    expect(parse('260176-2392', lateEvening)).toMatchObject({ ok: true, value: { normalized: '192601762392' } })
 
-    // 22:30 UTC = 23:30 on 31 Dec in Stockholm: still 2025, and a 2026 birth
-    // is impossible — so '-' (at most 99 this year) means 1926.
-    const beforeMidnight = parse('260101-2384', new Date('2025-12-31T22:30:00Z'))
-    expect(beforeMidnight.ok && beforeMidnight.value.normalized).toBe('192601012384')
+    // 23:30 UTC = 00:30 on 1 Jan in Stockholm: it is 2026, so the same string
+    // now means 16 January 2026 — two weeks ahead. A server reading the UTC
+    // year (still 2025) would wrongly accept it as the 1926 person.
+    const justAfterMidnight = new Date('2025-12-31T23:30:00Z')
+    expect(reasonFor('260176-2392', justAfterMidnight)).toBe('FUTURE')
+
+    // A baby born that night already parses. Test number 202601012384.
+    expect(parse('260101-2384', justAfterMidnight)).toMatchObject({ ok: true, value: { normalized: '202601012384' } })
+
+    // Once 16 January 2026 has passed, the string means the 2026 person.
+    // Test samordningsnummer 202601762392.
+    expect(parse('260176-2392', new Date('2026-01-20T12:00:00Z'))).toMatchObject({
+      ok: true,
+      value: { normalized: '202601762392' }
+    })
   })
 
   test('a 12-digit number carries its own century — the clock only matters for FUTURE', () => {
-    const result = parse('186408233234', new Date('2099-01-01T12:00:00Z'))
-    expect(result.ok && result.value.birthDate).toBe('1864-08-23')
+    // Test number 189001019802, parsed "in 2099".
+    const result = parse('189001019802', new Date('2099-01-01T12:00:00Z'))
+    expect(result.ok && result.value.birthDate).toBe('1890-01-01')
+  })
+
+  test("in the 2100s a 10-digit '-' number infers the 2100s → CENTURY", () => {
+    // 000101-2384 in 2100: '-' means "at most 99 this year" → born 2100,
+    // a century we have no reason to believe Skatteverket will issue.
+    const IN_2100 = new Date('2100-06-15T10:00:00Z')
+    expect(reasonFor('000101-2384', IN_2100)).toBe('CENTURY')
+    // With '+' it is test number 200001012384, a centenarian by then.
+    expect(parse('000101+2384', IN_2100)).toMatchObject({ ok: true, value: { normalized: '200001012384' } })
+  })
+
+  test('an invalid referenceDate is a programming error — it throws, clearly', () => {
+    // Not a reason code: a broken clock would infer wrong centuries for
+    // every number, so it must fail loudly rather than parse quietly.
+    expect(() => parsePersonnummer('196408233234', { referenceDate: new Date('nonsense') })).toThrow(
+      'referenceDate must be a valid Date'
+    )
   })
 })
 
@@ -155,9 +198,10 @@ describe('samordningsnummer (day + 60)', () => {
   })
 
   test('the 10-digit form works the same way', () => {
-    const result = parse('140168-2396')
+    // Test samordningsnummer 201401612385: day 61 → 1 January 2014.
+    const result = parse('140161-2385')
     expect(result.ok && result.value.kind).toBe('samordningsnummer')
-    expect(result.ok && result.value.normalized).toBe('201401682396')
+    expect(result.ok && result.value.normalized).toBe('201401612385')
   })
 
   // All four are in Skatteverket's published test data. Rejecting them would
@@ -227,20 +271,20 @@ describe('parsePersonnummer — rejection reasons', () => {
 
 describe('isValidPersonnummer', () => {
   test('is parse().ok', () => {
-    expect(isValidPersonnummer('640823-3234')).toBe(true)
-    expect(isValidPersonnummer('640823-3235')).toBe(false)
+    expect(isValidPersonnummer('640823-3234', AT_MIDSUMMER)).toBe(true)
+    expect(isValidPersonnummer('640823-3235', AT_MIDSUMMER)).toBe(false)
   })
 })
 
 describe('normalizePersonnummer', () => {
   test('returns the twelve digits', () => {
-    expect(normalizePersonnummer('640823-3234')).toBe('196408233234')
+    expect(normalizePersonnummer('640823-3234', AT_MIDSUMMER)).toBe('196408233234')
   })
 
   test('throws a 400 ValidationError carrying the reason', () => {
     let thrown: unknown = null
     try {
-      normalizePersonnummer('640823-3235')
+      normalizePersonnummer('640823-3235', AT_MIDSUMMER)
     } catch (error) {
       thrown = error
     }
@@ -252,7 +296,7 @@ describe('normalizePersonnummer', () => {
   test('🔑 the error never contains the number — errors end up in logs', () => {
     let thrown: unknown = null
     try {
-      normalizePersonnummer('19640823-3235')
+      normalizePersonnummer('19640823-3235', AT_MIDSUMMER)
     } catch (error) {
       thrown = error
     }
@@ -264,20 +308,20 @@ describe('normalizePersonnummer', () => {
 
 describe('formatPersonnummer / maskPersonnummer', () => {
   test('format is the 12-digit form with a dash', () => {
-    expect(formatPersonnummer('6408233234')).toBe('19640823-3234')
+    expect(formatPersonnummer('6408233234', AT_MIDSUMMER)).toBe('19640823-3234')
   })
 
   test("format uses '-' even for someone over 100 — the century is written out", () => {
-    expect(formatPersonnummer('900101+9802')).toBe('18900101-9802')
+    expect(formatPersonnummer('900101+9802', AT_MIDSUMMER)).toBe('18900101-9802')
   })
 
   test('mask keeps the birth date and hides the four identifying digits', () => {
-    expect(maskPersonnummer('640823-3234')).toBe('19640823-****')
+    expect(maskPersonnummer('640823-3234', AT_MIDSUMMER)).toBe('19640823-****')
   })
 
   test('both refuse an invalid number rather than display garbage', () => {
-    expect(() => formatPersonnummer('640823-3235')).toThrow(ValidationError)
-    expect(() => maskPersonnummer('nonsense')).toThrow(ValidationError)
+    expect(() => formatPersonnummer('640823-3235', AT_MIDSUMMER)).toThrow(ValidationError)
+    expect(() => maskPersonnummer('nonsense', AT_MIDSUMMER)).toThrow(ValidationError)
   })
 })
 
@@ -289,7 +333,10 @@ describe('personnummerLookupKey', () => {
     // encoding. Every user linked by personnummer would silently stop
     // matching. Do not "fix" the expected value — fix the code, or write a
     // migration that recomputes every key under a new version prefix.
-    expect(personnummerLookupKey('640823-3234', PEPPER)).toBe(
+    //
+    // Pinned on the 12-digit form so the vector cannot depend on the clock:
+    // a 10-digit form is only "1964" for as long as century inference says so.
+    expect(personnummerLookupKey('196408233234', PEPPER, AT_MIDSUMMER)).toBe(
       '2a332fedbfbad70000a17f51e5417ed4dc7dff33b9fcf658a4941ba9a85a6fce'
     )
   })
@@ -297,28 +344,50 @@ describe('personnummerLookupKey', () => {
   test('every written form of the same number gives the same key', () => {
     const keys = new Set(
       ['640823-3234', '6408233234', '19640823-3234', '196408233234'].map((form) =>
-        personnummerLookupKey(form, PEPPER)
+        personnummerLookupKey(form, PEPPER, AT_MIDSUMMER)
       )
     )
     expect(keys.size).toBe(1)
   })
 
+  test('forwards referenceDate — a 10-digit form keys the person the clock says it is', () => {
+    // At 23:30 on New Year's Eve in Stockholm, 260176-2392 is test
+    // samordningsnummer 192601762392 (see the New Year test above).
+    const lateEvening = { referenceDate: new Date('2025-12-31T22:30:00Z') }
+    expect(personnummerLookupKey('260176-2392', PEPPER, lateEvening)).toBe(
+      personnummerLookupKey('192601762392', PEPPER, lateEvening)
+    )
+  })
+
   test('a different pepper gives a different key — the secret is what protects it', () => {
-    expect(personnummerLookupKey('640823-3234', Buffer.alloc(32, 2))).not.toBe(
-      personnummerLookupKey('640823-3234', PEPPER)
+    expect(personnummerLookupKey('196408233234', Buffer.alloc(32, 2), AT_MIDSUMMER)).not.toBe(
+      personnummerLookupKey('196408233234', PEPPER, AT_MIDSUMMER)
     )
   })
 
   test('is 64 lowercase hex characters', () => {
-    expect(personnummerLookupKey('191401682396', PEPPER)).toMatch(/^[0-9a-f]{64}$/)
+    expect(personnummerLookupKey('191401682396', PEPPER, AT_MIDSUMMER)).toMatch(/^[0-9a-f]{64}$/)
   })
 
   test('refuses a pepper shorter than 32 bytes', () => {
-    expect(() => personnummerLookupKey('640823-3234', Buffer.alloc(31, 1))).toThrow('at least 32 bytes')
+    expect(() => personnummerLookupKey('196408233234', Buffer.alloc(31, 1), AT_MIDSUMMER)).toThrow(
+      'at least 32 bytes'
+    )
+  })
+
+  test('🔑 refuses a pepper that is not bytes — even a long string', () => {
+    // The trap: a string has no byteLength, so `undefined < 32` is false and a
+    // length check alone lets it through — and createHmac takes string keys.
+    // Wave 2 reads the pepper from env, where it arrives as text.
+    const textPepper = 'x'.repeat(64) as unknown as Uint8Array
+    expect(() => personnummerLookupKey('196408233234', textPepper, AT_MIDSUMMER)).toThrow('must be a Uint8Array')
+    expect(() => personnummerLookupKey('196408233234', undefined as unknown as Uint8Array, AT_MIDSUMMER)).toThrow(
+      'must be a Uint8Array'
+    )
   })
 
   test('refuses an invalid number with a ValidationError', () => {
-    expect(() => personnummerLookupKey('640823-3235', PEPPER)).toThrow(ValidationError)
+    expect(() => personnummerLookupKey('640823-3235', PEPPER, AT_MIDSUMMER)).toThrow(ValidationError)
   })
 })
 

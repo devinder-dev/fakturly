@@ -103,6 +103,12 @@ export function ocrReference(invoiceNumber: string): string {
  *     (2026-0001) has 8 digits; 25 is Bankgirot's maximum.
  *   - the length digit equals the length mod 10
  *   - the Luhn check digit is valid
+ *   - the sequence is spelled the way allocateInvoiceNumber() spells it
+ *     (repositories/invoiceNumber.repository.ts): never all zeros (the
+ *     series starts at 1), and padded to 4 digits but never beyond — so a
+ *     5+ digit sequence never starts with 0. Anything else is not ours, and
+ *     rejecting it means "2026-01234" can never be mistaken for "2026-1234"
+ *     by code that compares sequences as numbers.
  *
  * Strict on purpose: no trimming, no stripping of spaces. The caller decides
  * what a raw bank field may contain; this function only answers "is this
@@ -122,5 +128,11 @@ export function invoiceNumberFromOcr(reference: string): string | null {
   if (!isValidLuhn(reference)) return null
 
   const digits = reference.slice(0, -2)
-  return `${digits.slice(0, 4)}-${digits.slice(4)}`
+  const year = digits.slice(0, 4)
+  const sequence = digits.slice(4)
+
+  if (/^0+$/.test(sequence)) return null
+  if (sequence.length > 4 && sequence.startsWith('0')) return null
+
+  return `${year}-${sequence}`
 }

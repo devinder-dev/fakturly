@@ -72,11 +72,29 @@ describe('invoiceNumberFromOcr', () => {
     }
   )
 
+  test.each([
+    ['2026-0000', 'all zeros — the series starts at 1'],
+    ['2026-00000', 'all zeros, five digits'],
+    ['2026-01234', 'a 5-digit sequence with a leading zero — we never pad past 4']
+  ])('%p (%s) is a valid reference but not one of ours → null', (invoiceNumber) => {
+    expect(invoiceNumberFromOcr(ocrReference(invoiceNumber))).toBeNull()
+  })
+
+  test('a 4-digit sequence with leading zeros is our normal spelling', () => {
+    expect(invoiceNumberFromOcr(ocrReference('2026-0123'))).toBe('2026-0123')
+  })
+
   describe('typos a payer makes', () => {
     // For these two references every variant below is rejected. That is
-    // not a guarantee for every reference — a deletion or insertion passes
-    // both checks by chance roughly once in a hundred — which is why a
-    // non-null answer is only ever a candidate (see the function's comment).
+    // not a guarantee for every reference. Measured over all 12 000
+    // references for 2026-0001 … 2026-12000, a single typo still yields
+    // SOME candidate this often:
+    //   deleted digit    ~0.03 % (0 for 10-digit references: 9 digits is
+    //                    below our minimum; ~0.17 % for 11-digit ones)
+    //   inserted digit   ~0.16 %
+    //   swapped digits   ~0.76 % (mostly Luhn's blind spot, 09 <-> 90)
+    // Rare, not impossible — which is why a non-null answer is only ever a
+    // candidate (see the function's comment).
     const REFERENCES = [ocrReference('2026-0042'), ocrReference('2026-10042')]
 
     test('every single-digit substitution is rejected (Luhn catches all of these)', () => {
