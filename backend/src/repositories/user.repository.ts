@@ -14,8 +14,9 @@ export type AuthUser = {
   password: string
   role: Role
   /** Read on every login AND every refresh — the token's `org` claim is
-   *  always minted from this row, never copied from an older token. */
-  organization: { id: string; name: string }
+   *  always minted from this row, never copied from an older token. Null for
+   *  a customer login, which belongs to no organization (ADR 56). */
+  organization: { id: string; name: string } | null
 }
 
 const authUserSelect = {
@@ -43,6 +44,15 @@ export async function findAuthUserByEmail(email: string): Promise<AuthUser | nul
 
 export async function findAuthUserById(id: string): Promise<AuthUser | null> {
   return prisma.user.findUnique({ where: { id }, select: authUserSelect })
+}
+
+/**
+ * The organization a user's actions are filed under in the audit log: the
+ * staff member's own, or null for a customer login (and for an unknown id).
+ */
+export async function findOrganizationIdOfUser(id: string): Promise<string | null> {
+  const user = await prisma.user.findUnique({ where: { id }, select: { organizationId: true } })
+  return user?.organizationId ?? null
 }
 
 /**

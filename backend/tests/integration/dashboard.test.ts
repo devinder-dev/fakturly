@@ -10,6 +10,7 @@ import {
   buildTestApp,
   createTestUser,
   createTestOrganization,
+  clientUserId,
   loginAs,
   authed,
   clearRateLimits,
@@ -50,10 +51,10 @@ beforeAll(async () => {
     name: `Dashboard AB ${suffix}`
   })
   clientId = created.json().client.id
-  userIds.push(created.json().client.userId)
+  userIds.push((await clientUserId(created.json().client.id)))
 
   await prisma.user.update({
-    where: { id: created.json().client.userId },
+    where: { id: (await clientUserId(created.json().client.id)) },
     data: { password: await testPasswordHash() }
   })
   clientToken = (await loginAs(app, CLIENT_EMAIL, '198.51.100.121')).accessToken
@@ -138,7 +139,7 @@ describe('the figures move with the ledger', () => {
     const invoice = await issue(50_000)
     const mid = await getAdminDashboard()
 
-    const paid = await invoiceRepository.markPaid(invoice.id, {
+    const paid = await invoiceRepository.markPaid(organizationId, invoice.id, {
       stripePaymentId: `pi_dash_${suffix}`,
       amountOre: invoice.grossTotalOre
     })

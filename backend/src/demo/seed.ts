@@ -224,9 +224,13 @@ export async function resetDemoData(now: Date = new Date()): Promise<DemoSummary
     select: { id: true }
   })
 
+  // The admin as services see them — every invoice below is written within
+  // this organization, exactly as when a real admin clicks the buttons.
+  const actor = { userId: admin.id, organizationId: organization.id }
+
   const clientIds: string[] = []
   for (const client of CLIENTS) {
-    const created = await clientRepository.createClientWithUser(organization.id, {
+    const created = await clientRepository.provisionClient(organization.id, {
       email: client.email,
       passwordHash: await hashPassword(client.password ?? generateTemporaryPassword()),
       name: client.name,
@@ -253,7 +257,7 @@ export async function resetDemoData(now: Date = new Date()): Promise<DemoSummary
     // The real service: totals, VAT, numbering, audit row.
     const invoice = await invoiceService.createInvoice(
       { clientId, dueDate: dueAt, items: scenario.items },
-      admin.id
+      actor
     )
 
     await prisma.invoice.update({
@@ -267,7 +271,7 @@ export async function resetDemoData(now: Date = new Date()): Promise<DemoSummary
     }
 
     // The real send: DRAFT -> SENT plus the ledger row, then moved in time.
-    await invoiceService.sendInvoice(invoice.id, admin.id)
+    await invoiceService.sendInvoice(invoice.id, actor)
     await prisma.invoice.update({ where: { id: invoice.id }, data: { sentAt: issuedAt } })
     await prisma.transaction.updateMany({
       where: { invoiceId: invoice.id, type: 'INVOICE_CREATED' },
@@ -276,7 +280,7 @@ export async function resetDemoData(now: Date = new Date()): Promise<DemoSummary
 
     if (scenario.outcome.kind === 'credited') {
       const creditedAt = new Date(issuedAt.getTime() + scenario.outcome.daysAfterIssue * DAY_MS)
-      const result = await invoiceService.issueCreditNote(invoice.id, admin.id)
+      const result = await invoiceService.issueCreditNote(invoice.id, actor)
       await prisma.invoice.update({
         where: { id: result.creditNote.id },
         data: { issueDate: creditedAt, sentAt: creditedAt, dueDate: creditedAt, createdAt: creditedAt }
@@ -293,7 +297,12 @@ export async function resetDemoData(now: Date = new Date()): Promise<DemoSummary
       const remindedAt = new Date(issuedAt.getTime() + scenario.outcome.daysAfterIssue * DAY_MS)
       // Interest first, as the real timeline would have it, then the fee.
       await runOverdueCheck(remindedAt)
-      const charged = await invoiceRepository.chargeReminderFee(invoice.id, REMINDER_FEE_ORE, remindedAt)
+      const charged = await invoiceRepository.chargeReminderFee(
+        organization.id,
+        invoice.id,
+        REMINDER_FEE_ORE,
+        remindedAt
+      )
       if (!charged) throw new Error(`Demo: could not charge reminder fee on ${invoice.invoiceNumber}`)
       await prisma.transaction.updateMany({
         where: { invoiceId: invoice.id, type: 'REMINDER_FEE_ADDED' },
@@ -317,7 +326,7 @@ export async function resetDemoData(now: Date = new Date()): Promise<DemoSummary
       }
 
       const current = await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } })
-      const paid = await invoiceRepository.markPaid(invoice.id, {
+      const paid = await invoiceRepository.markPaid(organization.id, invoice.id, {
         stripePaymentId: `pi_demo_${invoice.invoiceNumber.replace('-', '')}`,
         amountOre: current.grossTotalOre + current.lateFeeOre
       })
@@ -379,10 +388,10 @@ async function wipeEverything(): Promise<void> {
     prisma.auditLog.deleteMany(),
     prisma.client.deleteMany(),
     prisma.user.deleteMany(),
-    // After the users: the foreign key refuses to drop an organization
-    // anyone still belongs to.
-    prisma.organization.deleteMany(),
-    prisma.invoiceNumberSeries.deleteMany()
+    prisma.invoiceNumberSeries.deleteMany(),
+    // Last: every table above points at an organization, and the foreign
+    // keys refuse to drop one that anything still references.
+    prisma.organization.deleteMany()
   ])
 
   for (const pattern of ['fakturly:rl:*', 'fakturly:login:fail:*', 'fakturly:denylist:*']) {

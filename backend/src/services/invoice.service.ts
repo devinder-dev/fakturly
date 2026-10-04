@@ -13,7 +13,7 @@ import { getEmailQueue } from '../jobs/queues.ts'
 import { NotFoundError, BusinessRuleError } from '../lib/errors.ts'
 import type { InvoiceRecord } from '../repositories/invoice.repository.ts'
 import type { CreateInvoiceInput, InvoiceListQuery } from '../validators/invoice.validator.ts'
-import type { AuthenticatedUser } from '../types/auth.ts'
+import type { Actor, AuthenticatedUser } from '../types/auth.ts'
 import type { RequestContext } from './auth.service.ts'
 import type { InvoiceStatus } from '../generated/prisma/client.ts'
 
@@ -25,8 +25,10 @@ import type { InvoiceStatus } from '../generated/prisma/client.ts'
  * Creates a DRAFT invoice.
  *
  * The order matters:
- *   1. Confirm the client exists — otherwise we would burn an invoice number
- *      on an invoice that cannot be created.
+ *   1. Confirm the client exists IN THE ADMIN'S ORGANIZATION — otherwise we
+ *      would burn an invoice number on an invoice that cannot be created.
+ *      Another organization's client id gets the same 404 as one that never
+ *      existed, and advances no series.
  *   2. Calculate every line and the totals, from the items alone.
  *   3. Allocate the invoice number.
  *   4. Write invoice + lines + ledger entry atomically.
@@ -34,10 +36,10 @@ import type { InvoiceStatus } from '../generated/prisma/client.ts'
  */
 export async function createInvoice(
   input: CreateInvoiceInput,
-  actingAdminId: string,
+  actor: Actor,
   context: RequestContext = {}
 ): Promise<InvoiceRecord> {
-  const client = await clientRepository.findClientById(input.clientId)
+  const client = await clientRepository.findClientById(actor.organizationId, input.clientId)
   if (!client) {
     throw new NotFoundError('Kunden')
   }
@@ -76,9 +78,9 @@ export async function createInvoice(
     throw new BusinessRuleError('Fakturans totalbelopp kan inte vara noll')
   }
 
-  const invoiceNumber = await allocateInvoiceNumber(stockholmYear())
+  const invoiceNumber = await allocateInvoiceNumber(actor.organizationId, stockholmYear())
 
-  const invoice = await invoiceRepository.createInvoiceWithItems({
+  const invoice = await invoiceRepository.createInvoiceWithItems(actor.organizationId, {
     invoiceNumber,
     clientId: input.clientId,
     dueDate: input.dueDate,
@@ -91,7 +93,8 @@ export async function createInvoice(
   await record({
     action: AuditAction.INVOICE_CREATED,
     resource: AuditResource.INVOICE,
-    userId: actingAdminId,
+    userId: actor.userId,
+    organizationId: actor.organizationId,
     resourceId: invoice.id,
     ipAddress: context.ip,
     userAgent: context.userAgent
@@ -105,16 +108,15 @@ export async function createInvoice(
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Resolves the caller's own client id, or null for an admin.
+ * A customer's own customer records' ids — one per seller they buy from.
  *
- * A CLIENT's token carries a user id, not a client id — deliberately, since
- * the token holds no more than it must. So every scoped read costs one lookup.
+ * A CLIENT's token carries a user id, not client ids — deliberately, since
+ * the token holds no more than it must, and a seller can add this login as
+ * its customer at any time. So every scoped read costs one lookup.
  */
-async function callerClientId(caller: AuthenticatedUser): Promise<string | null> {
-  if (caller.role === 'ADMIN') return null
-
-  const client = await clientRepository.findClientByUserId(caller.id)
-  return client?.id ?? null
+async function ownClientIds(userId: string): Promise<string[]> {
+  const clients = await clientRepository.findClientsOfUser(userId)
+  return clients.map((client) => client.id)
 }
 
 /**
@@ -130,17 +132,15 @@ export async function getInvoiceForCaller(
   invoiceId: string,
   caller: AuthenticatedUser
 ): Promise<InvoiceRecord> {
-  const invoice = await invoiceRepository.findInvoiceById(invoiceId)
+  // The rule is in the query for both roles: the admin's organization, or
+  // the customer's own records across every seller they buy from.
+  const invoice =
+    caller.role === 'ADMIN'
+      ? await invoiceRepository.findInvoiceById(caller.organizationId, invoiceId)
+      : await invoiceRepository.findInvoiceOfClients(await ownClientIds(caller.id), invoiceId)
+
+  // Missing, another organization's, another customer's: one answer.
   if (!invoice) {
-    throw new NotFoundError('Fakturan')
-  }
-
-  if (caller.role === 'ADMIN') {
-    return invoice
-  }
-
-  const ownClientId = await callerClientId(caller)
-  if (!ownClientId || invoice.clientId !== ownClientId) {
     throw new NotFoundError('Fakturan')
   }
 
@@ -160,7 +160,10 @@ export async function listInvoicesForCaller(
   caller: AuthenticatedUser
 ): Promise<invoiceRepository.ListInvoicesResult> {
   if (caller.role === 'ADMIN') {
-    return invoiceRepository.listInvoices({
+    // clientId narrows WITHIN the organization. Another organization's
+    // client id is not refused — it just matches nothing here, which tells
+    // the caller nothing about whether it exists.
+    return invoiceRepository.listInvoices(caller.organizationId, {
       limit: query.limit,
       offset: query.offset,
       status: query.status,
@@ -169,23 +172,23 @@ export async function listInvoicesForCaller(
     })
   }
 
-  const ownClientId = await callerClientId(caller)
+  const clientIds = await ownClientIds(caller.id)
 
-  // A CLIENT with no client record sees nothing — not an error, just an empty
-  // list. There is nothing to hide and nothing to show.
-  if (!ownClientId) {
+  // A CLIENT with no customer record sees nothing — not an error, just an
+  // empty list. There is nothing to hide and nothing to show.
+  if (clientIds.length === 0) {
     return { invoices: [], total: 0 }
   }
 
-  return invoiceRepository.listInvoices({
+  // Deliberately ignores query.clientId. A client asking for someone else's
+  // invoices is silently scoped back to their own rather than refused —
+  // refusing would confirm the other client id is real. Every seller they
+  // buy from is included; each invoice names its seller.
+  return invoiceRepository.listInvoicesOfClients(clientIds, {
     limit: query.limit,
     offset: query.offset,
     status: query.status,
-    type: query.type,
-    // Deliberately ignores query.clientId. A client asking for someone else's
-    // invoices is silently scoped back to their own rather than refused —
-    // refusing would confirm the other client id is real.
-    clientId: ownClientId
+    type: query.type
   })
 }
 
@@ -233,10 +236,10 @@ export function canTransition(from: InvoiceStatus, to: InvoiceStatus): boolean {
  */
 export async function sendInvoice(
   invoiceId: string,
-  actingAdminId: string,
+  actor: Actor,
   context: RequestContext = {}
 ): Promise<InvoiceRecord> {
-  const invoice = await invoiceRepository.findInvoiceById(invoiceId)
+  const invoice = await invoiceRepository.findInvoiceById(actor.organizationId, invoiceId)
   if (!invoice) {
     throw new NotFoundError('Fakturan')
   }
@@ -250,7 +253,7 @@ export async function sendInvoice(
   // Status change and ledger entry in one transaction. The expected status is
   // in the WHERE clause, so two concurrent sends cannot both succeed — the
   // second matches no rows and gets the conflict error below.
-  const updated = await invoiceRepository.markSent(invoiceId)
+  const updated = await invoiceRepository.markSent(actor.organizationId, invoiceId)
 
   if (!updated) {
     throw new BusinessRuleError('Fakturan ändrades av någon annan. Försök igen.')
@@ -259,7 +262,8 @@ export async function sendInvoice(
   await record({
     action: AuditAction.INVOICE_SENT,
     resource: AuditResource.INVOICE,
-    userId: actingAdminId,
+    userId: actor.userId,
+    organizationId: actor.organizationId,
     resourceId: invoiceId,
     ipAddress: context.ip,
     userAgent: context.userAgent
@@ -268,7 +272,7 @@ export async function sendInvoice(
   // The customer is told. After the status change and outside its
   // transaction: the invoice IS sent whether or not the mail server is up,
   // and the email service records the attempt either way.
-  const client = await clientRepository.findClientById(updated.clientId)
+  const client = await clientRepository.findClientById(actor.organizationId, updated.clientId)
   if (client) {
     await sendInvoiceEmail({
       to: client.email,
@@ -311,10 +315,10 @@ export async function sendInvoice(
  */
 export async function issueCreditNote(
   originalId: string,
-  actingAdminId: string,
+  actor: Actor,
   context: RequestContext = {}
 ): Promise<{ creditNote: InvoiceRecord; original: InvoiceRecord }> {
-  const original = await invoiceRepository.findInvoiceById(originalId)
+  const original = await invoiceRepository.findInvoiceById(actor.organizationId, originalId)
   if (!original) {
     throw new NotFoundError('Fakturan')
   }
@@ -357,9 +361,9 @@ export async function issueCreditNote(
   // Same series as invoices. The law counts a credit note as an invoice, and
   // a separate numbering would leave a gap in the "real" series that someone
   // would have to explain.
-  const creditNoteNumber = await allocateInvoiceNumber(stockholmYear())
+  const creditNoteNumber = await allocateInvoiceNumber(actor.organizationId, stockholmYear())
 
-  const result = await invoiceRepository.createCreditNote({
+  const result = await invoiceRepository.createCreditNote(actor.organizationId, {
     originalId,
     creditNoteNumber,
     clientId: original.clientId,
@@ -378,7 +382,8 @@ export async function issueCreditNote(
   await record({
     action: AuditAction.CREDIT_NOTE_ISSUED,
     resource: AuditResource.INVOICE,
-    userId: actingAdminId,
+    userId: actor.userId,
+    organizationId: actor.organizationId,
     resourceId: result.creditNote.id,
     ipAddress: context.ip,
     userAgent: context.userAgent
@@ -412,10 +417,10 @@ export type ReminderOutcome = {
  */
 export async function sendReminder(
   invoiceId: string,
-  actingAdminId: string,
+  actor: Actor,
   context: RequestContext = {}
 ): Promise<ReminderOutcome> {
-  const invoice = await invoiceRepository.findInvoiceById(invoiceId)
+  const invoice = await invoiceRepository.findInvoiceById(actor.organizationId, invoiceId)
   if (!invoice) {
     throw new NotFoundError('Fakturan')
   }
@@ -430,21 +435,27 @@ export async function sendReminder(
 
   const now = new Date()
   let feeCharged = false
-  let updated = await invoiceRepository.chargeReminderFee(invoiceId, REMINDER_FEE_ORE, now)
+  let updated = await invoiceRepository.chargeReminderFee(
+    actor.organizationId,
+    invoiceId,
+    REMINDER_FEE_ORE,
+    now
+  )
 
   if (updated) {
     feeCharged = true
   } else {
     // Already charged once. Just record that another reminder went out.
-    await invoiceRepository.markReminderSent(invoiceId, now)
-    updated = await invoiceRepository.findInvoiceById(invoiceId)
+    await invoiceRepository.markReminderSent(actor.organizationId, invoiceId, now)
+    updated = await invoiceRepository.findInvoiceById(actor.organizationId, invoiceId)
     if (!updated) throw new NotFoundError('Fakturan')
   }
 
   await record({
     action: AuditAction.REMINDER_SENT,
     resource: AuditResource.INVOICE,
-    userId: actingAdminId,
+    userId: actor.userId,
+    organizationId: actor.organizationId,
     resourceId: invoiceId,
     ipAddress: context.ip,
     userAgent: context.userAgent
@@ -468,10 +479,10 @@ export async function sendReminder(
  */
 export async function deleteDraft(
   invoiceId: string,
-  actingAdminId: string,
+  actor: Actor,
   context: RequestContext = {}
 ): Promise<void> {
-  const invoice = await invoiceRepository.findInvoiceById(invoiceId)
+  const invoice = await invoiceRepository.findInvoiceById(actor.organizationId, invoiceId)
   if (!invoice) {
     throw new NotFoundError('Fakturan')
   }
@@ -482,7 +493,7 @@ export async function deleteDraft(
     )
   }
 
-  const deleted = await invoiceRepository.deleteDraftInvoice(invoiceId)
+  const deleted = await invoiceRepository.deleteDraftInvoice(actor.organizationId, invoiceId)
   if (!deleted) {
     // It was sent between our check and the delete.
     throw new BusinessRuleError('Fakturan kunde inte raderas — den har skickats.')
@@ -491,7 +502,8 @@ export async function deleteDraft(
   await record({
     action: AuditAction.INVOICE_DELETED,
     resource: AuditResource.INVOICE,
-    userId: actingAdminId,
+    userId: actor.userId,
+    organizationId: actor.organizationId,
     resourceId: invoiceId,
     ipAddress: context.ip,
     userAgent: context.userAgent

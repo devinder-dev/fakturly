@@ -44,9 +44,10 @@ export type SessionUser = {
   id: string
   email: string
   role: Role
-  /** The name is for display ("which company am I working in"); the id is
-   *  what the token carries. */
-  organization: { id: string; name: string }
+  /** Staff only: the name is for display ("which company am I working in"),
+   *  the id is what the token carries. Null for a customer login, which
+   *  belongs to no organization — its sellers are at GET /clients/me. */
+  organization: { id: string; name: string } | null
 }
 
 export type AuthResult = {
@@ -74,7 +75,7 @@ async function issueTokenPair(
   // `user` was just read from the database by login or refresh, so the
   // organization in the new token is the CURRENT one — refresh never copies
   // the claim forward from the token it replaces.
-  const access = createAccessToken(user.id, user.role, user.organization.id)
+  const access = createAccessToken(user.id, user.role, user.organization?.id ?? null)
   const refresh = createRefreshToken()
 
   await refreshTokenRepository.createRefreshToken(
@@ -99,7 +100,9 @@ async function issueTokenPair(
       id: user.id,
       email: user.email,
       role: user.role,
-      organization: { id: user.organization.id, name: user.organization.name }
+      organization: user.organization
+        ? { id: user.organization.id, name: user.organization.name }
+        : null
     }
   }
 }
@@ -137,6 +140,9 @@ export async function login(
     await record({
       action: AuditAction.LOGIN_BLOCKED_RATE_LIMIT,
       resource: AuditResource.USER,
+      // Not looked up: the block happens BEFORE touching the database, so
+      // a flood of guesses cannot become a flood of queries.
+      organizationId: null,
       email,
       ipAddress: context.ip,
       userAgent: context.userAgent
@@ -163,6 +169,9 @@ export async function login(
       action: AuditAction.LOGIN_FAILED,
       resource: AuditResource.USER,
       userId: user?.id ?? null,
+      // A failed login against a staff account is that organization's
+      // business — its admin should see someone guessing at a colleague.
+      organizationId: user?.organization?.id ?? null,
       email,
       resourceId: user?.id ?? null,
       ipAddress: context.ip,
@@ -186,6 +195,7 @@ export async function login(
       action: AuditAction.PASSWORD_REHASHED,
       resource: AuditResource.USER,
       userId: user.id,
+      organizationId: user.organization?.id ?? null,
       resourceId: user.id,
       ipAddress: context.ip
     })
@@ -197,6 +207,7 @@ export async function login(
     action: AuditAction.LOGIN_SUCCESS,
     resource: AuditResource.USER,
     userId: user.id,
+    organizationId: user.organization?.id ?? null,
     email: user.email,
     resourceId: user.id,
     ipAddress: context.ip,
@@ -260,6 +271,7 @@ export async function refresh(
       action: AuditAction.TOKEN_THEFT_DETECTED,
       resource: AuditResource.REFRESH_TOKEN,
       userId: stored.userId,
+      organizationId: await userRepository.findOrganizationIdOfUser(stored.userId),
       resourceId: stored.familyId,
       ipAddress: context.ip,
       userAgent: context.userAgent
@@ -289,6 +301,7 @@ export async function refresh(
     action: AuditAction.TOKEN_REFRESHED,
     resource: AuditResource.REFRESH_TOKEN,
     userId: user.id,
+    organizationId: user.organization?.id ?? null,
     resourceId: stored.familyId,
     ipAddress: context.ip,
     userAgent: context.userAgent
@@ -348,6 +361,9 @@ export async function logout(
       action: AuditAction.LOGOUT,
       resource: AuditResource.USER,
       userId,
+      // Looked up rather than read from the access token: logout also works
+      // with only the refresh cookie, and then there are no claims at all.
+      organizationId: await userRepository.findOrganizationIdOfUser(userId),
       resourceId: familyId,
       ipAddress: context.ip,
       userAgent: context.userAgent

@@ -10,6 +10,7 @@ import {
   buildTestApp,
   createTestUser,
   createTestOrganization,
+  clientUserId,
   loginAs,
   authed,
   clearRateLimits,
@@ -46,7 +47,7 @@ beforeAll(async () => {
     name: `Rapport AB ${suffix}`
   })
   clientId = created.json().client.id
-  userIds.push(created.json().client.userId)
+  userIds.push((await clientUserId(created.json().client.id)))
   const clientUser = await createTestUser(organizationId, `rep-kund2-${suffix}@kund.se`, 'CLIENT')
   userIds.push(clientUser.id)
   clientToken = (await loginAs(app, clientUser.email, '198.51.100.171')).accessToken

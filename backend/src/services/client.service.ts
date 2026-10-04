@@ -9,15 +9,12 @@
 
 import { generateTemporaryPassword, hashPassword } from './password.service.ts'
 import { issuePasswordToken, buildSetPasswordUrl } from './passwordToken.service.ts'
-import { sendInviteEmail } from './email.service.ts'
+import { sendInviteEmail, sendCustomerAddedEmail } from './email.service.ts'
 import { record, AuditAction, AuditResource } from './audit.service.ts'
 import * as clientRepository from '../repositories/client.repository.ts'
-import type {
-  CreatedClient,
-  ClientRecord,
-  ListClientsResult
-} from '../repositories/client.repository.ts'
+import type { ClientRecord, ListClientsResult } from '../repositories/client.repository.ts'
 import type { RequestContext } from './auth.service.ts'
+import { env } from '../lib/env.ts'
 import { NotFoundError, ForbiddenError } from '../lib/errors.ts'
 import type { Actor, AuthenticatedUser } from '../types/auth.ts'
 
@@ -28,34 +25,50 @@ export type CreateClientInput = {
   address?: string | undefined
 }
 
+/** What the admin is told. Deliberately the same whatever happened to the
+ *  login — see createClient. */
+export type CreatedClient = {
+  clientId: string
+  email: string
+  name: string
+}
+
 /**
- * Creates a client account.
+ * Adds a customer to the admin's organization.
  *
- * The password is random and nobody — not even the admin who ran this — ever
- * sees it. It exists only because the column is required. The client receives
- * a set-password link by email instead (see the invite below). Sending the
- * temporary password back in the API response was rejected: it would put a
- * working credential in an admin's browser history, a proxy log and anyone's
- * screen recording.
+ * ONE LOGIN, ONE RECORD PER SELLER (ADR 56). If the email has no login yet, one
+ * is created and the person gets an invite to set a password. If it already
+ * has one — they buy from another seller too — that login gets a customer
+ * record here as well, and an email saying so. Either way the admin sees the
+ * SAME 201 with the same fields.
+ *
+ * That sameness is the security property. A response that differed — a 409
+ * "email taken", or even the login's id, whose cuid starts with a timestamp
+ * that would read as "older than now" — would tell this organization's admin
+ * that the address is someone else's customer. Across tenants, that is a
+ * leak; and with a 409, one seller could block another from adding the same
+ * customer by getting there first.
+ *
+ * The new login's password is random and nobody — not even the admin who ran
+ * this — ever sees it. It exists only because the column is required.
+ * Sending it back in the response was rejected: it would put a working
+ * credential in an admin's browser history and a proxy log. It is hashed even
+ * when an existing login makes it unused, so both paths cost the same.
  */
 export async function createClient(
   input: CreateClientInput,
   actor: Actor,
   context: RequestContext = {}
 ): Promise<CreatedClient> {
-  const actingAdminId = actor.userId
-
   // 256 bits from a CSPRNG, hashed with the same Argon2id parameters as any
-  // real password. Hashing something nobody knows may look pointless, but it
-  // keeps every row in the table uniform — no special case, no "is this a
+  // real password — so every row in the table is uniform, with no "is this a
   // placeholder?" branch anywhere else in the system.
-  const temporaryPassword = generateTemporaryPassword()
-  const passwordHash = await hashPassword(temporaryPassword)
+  const passwordHash = await hashPassword(generateTemporaryPassword())
 
-  // The new client joins the ADMIN's organization. The tenant comes from the
-  // admin's verified token; the request body has no field that could pick a
+  // The customer joins the ADMIN's organization, which comes from the
+  // admin's verified token. The request body has no field that could pick a
   // different one.
-  const created = await clientRepository.createClientWithUser(actor.organizationId, {
+  const created = await clientRepository.provisionClient(actor.organizationId, {
     email: input.email,
     passwordHash,
     name: input.name,
@@ -72,39 +85,65 @@ export async function createClient(
     // WHO did it — the admin, not the new client. An audit log answers
     // "who performed this action", not "who was affected"; the affected row
     // is resourceId.
-    userId: actingAdminId,
+    userId: actor.userId,
+    organizationId: actor.organizationId,
     resourceId: created.clientId,
     email: input.email,
     ipAddress: context.ip,
     userAgent: context.userAgent
   })
 
-  // ── The invite ───────────────────────────────────────────────
+  // ── Telling the person ───────────────────────────────────────
   //
   // Deliberately AFTER the client exists and outside its transaction. If
-  // sending fails, the client is still created and the invite can be resent;
+  // sending fails, the client is still created and the email can be resent;
   // rolling back a customer because a mail server was briefly down would be
-  // absurd. sendInviteEmail never throws, and records the attempt either way.
-  const invite = await issuePasswordToken(created.userId, 'INVITE')
+  // absurd. The email functions never throw, and log the attempt either way.
+  if (created.login === 'created') {
+    const invite = await issuePasswordToken(created.userId, 'INVITE')
 
-  await sendInviteEmail({
-    to: created.email,
-    clientName: created.name,
-    setPasswordUrl: buildSetPasswordUrl(invite.token),
-    expiresAt: invite.expiresAt,
-    userId: created.userId
-  })
+    await sendInviteEmail({
+      to: created.email,
+      clientName: created.name,
+      setPasswordUrl: buildSetPasswordUrl(invite.token),
+      expiresAt: invite.expiresAt,
+      userId: created.userId
+    })
 
-  await record({
-    action: AuditAction.INVITE_SENT,
-    resource: AuditResource.USER,
-    userId: actingAdminId,
-    resourceId: created.userId,
-    email: created.email,
-    ipAddress: context.ip
-  })
+    // Filed under NO organization, on purpose. The invite concerns the
+    // LOGIN, which belongs to none (ADR 56) — and filed under this
+    // organization, it would be the one row in this admin's audit trail that
+    // appears only when the address was brand new: the same "did they
+    // already exist?" leak the identical 201 exists to prevent.
+    await record({
+      action: AuditAction.INVITE_SENT,
+      resource: AuditResource.USER,
+      userId: actor.userId,
+      organizationId: null,
+      resourceId: created.userId,
+      email: created.email,
+      ipAddress: context.ip
+    })
+  } else {
+    // Exactly ONE email in every branch, so the request does the same work
+    // whatever the address already was: response time cannot tell them
+    // apart either. (What remains — the invite's token write — is a few
+    // milliseconds against an email send's hundreds; ADR 56.)
+    //
+    // A staff login elsewhere gets the same news without the portal link:
+    // one login has one role, so it cannot open the customer portal, and
+    // pointing it there would only mislead. Its invoices arrive by email,
+    // as anyone's do.
+    await sendCustomerAddedEmail({
+      to: created.email,
+      clientName: created.name,
+      organizationName: created.organizationName,
+      loginUrl: created.login === 'existing-client' ? `${env.FRONTEND_URL}/login` : null,
+      userId: created.userId
+    })
+  }
 
-  return created
+  return { clientId: created.clientId, email: created.email, name: created.name }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -144,22 +183,18 @@ export async function getClientForCaller(
   clientId: string,
   caller: AuthenticatedUser
 ): Promise<ClientRecord> {
-  const client = await clientRepository.findClientById(clientId)
+  // The ownership rule lives IN THE QUERY, for both roles: an admin's query
+  // is limited to their organization, a customer's to their own login. A
+  // row that is someone else's is simply not found — never loaded, then
+  // filtered. Note neither scope comes from the request: both come from the
+  // verified token, and nothing a caller sends can influence them.
+  const client =
+    caller.role === 'ADMIN'
+      ? await clientRepository.findClientById(caller.organizationId, clientId)
+      : await clientRepository.findClientOfUser(caller.id, clientId)
 
-  // Genuinely missing.
+  // Missing, another organization's, another customer's: one answer.
   if (!client) {
-    throw new NotFoundError('Kunden')
-  }
-
-  // An admin may read any client.
-  if (caller.role === 'ADMIN') {
-    return client
-  }
-
-  // A client may read only their own record. Note the comparison is against
-  // the row's userId, not an id supplied by the caller — the caller's identity
-  // comes from a verified token and nothing in the request can influence it.
-  if (client.userId !== caller.id) {
     throw new NotFoundError('Kunden')
   }
 
@@ -167,31 +202,30 @@ export async function getClientForCaller(
 }
 
 /**
- * The caller's own client record.
+ * The caller's own customer records — one per seller they buy from.
  *
  * Convenience for the client portal, which should never need to know its own
- * client id — it just asks for "mine". An endpoint that takes no id cannot
+ * client ids — it just asks for "mine". An endpoint that takes no id cannot
  * have an IDOR bug at all.
  */
-export async function getOwnClient(caller: AuthenticatedUser): Promise<ClientRecord> {
-  const client = await clientRepository.findClientByUserId(caller.id)
-
-  if (!client) {
-    // An ADMIN has no client record — they are staff, not a customer.
-    // 403 rather than 404 here is correct: this is a role problem, not a
-    // missing row, and it leaks nothing an admin does not already know.
+export async function getOwnClients(caller: AuthenticatedUser): Promise<ClientRecord[]> {
+  if (caller.role === 'ADMIN') {
+    // Staff, not a customer. 403 rather than 404 here is correct: this is a
+    // role problem, not a missing row, and it leaks nothing an admin does
+    // not already know.
     throw new ForbiddenError('Detta konto har ingen kundprofil')
   }
 
-  return client
+  return clientRepository.findClientsOfUser(caller.id)
 }
 
-/** Admin-only listing. The route enforces the role; this just reads. */
+/** The admin's own organization's customers. The route enforces the role. */
 export async function listClients(
+  actor: Actor,
   limit: number,
   offset: number
 ): Promise<ListClientsResult> {
-  return clientRepository.listClients(limit, offset)
+  return clientRepository.listClients(actor.organizationId, limit, offset)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -207,9 +241,8 @@ export type UpdateClientFields = {
 /**
  * Updates a client's details.
  *
- * Admin-only, enforced on the route. We still load the row first so a
- * non-existent id gives a clean 404 instead of a Prisma P2025 that the error
- * handler would have to translate.
+ * Admin-only, enforced on the route, and limited to the admin's own
+ * organization by the query itself.
  *
  * The audit row records WHICH fields changed, not their values. Names and
  * addresses are personal data, and an audit log is retained for years —
@@ -219,20 +252,21 @@ export type UpdateClientFields = {
 export async function updateClient(
   clientId: string,
   fields: UpdateClientFields,
-  actingAdminId: string,
+  actor: Actor,
   context: RequestContext = {}
 ): Promise<ClientRecord> {
-  const existing = await clientRepository.findClientById(clientId)
-  if (!existing) {
+  // One scoped statement: no row here — missing or another organization's —
+  // updates nothing and answers 404.
+  const updated = await clientRepository.updateClient(actor.organizationId, clientId, fields)
+  if (!updated) {
     throw new NotFoundError('Kunden')
   }
-
-  const updated = await clientRepository.updateClient(clientId, fields)
 
   await record({
     action: AuditAction.CLIENT_UPDATED,
     resource: AuditResource.CLIENT,
-    userId: actingAdminId,
+    userId: actor.userId,
+    organizationId: actor.organizationId,
     resourceId: clientId,
     // Field names only — never the old or new values.
     email: null,

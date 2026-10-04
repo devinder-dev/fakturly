@@ -129,8 +129,15 @@ export type TestUser = {
 }
 
 /**
- * organizationId is required and first, like in the tenant repositories: a
- * user without an organization cannot exist, so a test cannot make one.
+ * A login belonging to an organization, the way each role belongs (ADR 56).
+ *
+ *   ADMIN  — staff of `organizationId`.
+ *   CLIENT — a customer login (which has no organization of its own, the
+ *            database's CHECK insists) plus a customer record in
+ *            `organizationId`, so the login is that seller's customer.
+ *
+ * organizationId is required and first, like in the tenant repositories, so
+ * a test cannot create someone who belongs nowhere.
  */
 export async function createTestUser(
   organizationId: string,
@@ -138,10 +145,41 @@ export async function createTestUser(
   role: Role = 'CLIENT'
 ): Promise<TestUser> {
   const user = await prisma.user.create({
-    data: { email, password: await testPasswordHash(), role, organizationId },
+    data: {
+      email,
+      password: await testPasswordHash(),
+      role,
+      organizationId: role === 'ADMIN' ? organizationId : null
+    },
     select: { id: true, email: true, role: true }
   })
+
+  if (role === 'CLIENT') {
+    await prisma.client.create({
+      data: { organizationId, userId: user.id, name: email, email }
+    })
+  }
   return user
+}
+
+/**
+ * The login behind a customer record. POST /clients deliberately does not
+ * return it — a cuid starts with its creation time, which would reveal
+ * whether the login already existed — so tests read it from the database.
+ */
+export async function clientUserId(clientId: string): Promise<string> {
+  const client = await prisma.client.findUniqueOrThrow({
+    where: { id: clientId },
+    select: { userId: true }
+  })
+  return client.userId
+}
+
+/** A provisioned client as returned by POST /clients, plus its login id. */
+export async function withUserId<T extends { id: string }>(
+  client: T
+): Promise<T & { userId: string }> {
+  return { ...client, userId: await clientUserId(client.id) }
 }
 
 export type LoginResult = {
@@ -246,15 +284,27 @@ export async function cleanupUsers(userIds: string[]): Promise<void> {
 export async function cleanupOrganizations(organizationIds: string[]): Promise<void> {
   if (organizationIds.length === 0) return
 
+  // Staff carry the organization; customer logins reach it only through a
+  // Client row. Both kinds go, with everything they own.
   const users = await prisma.user.findMany({
-    where: { organizationId: { in: organizationIds } },
+    where: {
+      OR: [
+        { organizationId: { in: organizationIds } },
+        { clients: { some: { organizationId: { in: organizationIds } } } }
+      ]
+    },
     select: { id: true }
   })
   await cleanupUsers(users.map((u) => u.id))
 
-  // ORGANIZATION_CREATED rows have no userId, so cleanupUsers misses them.
+  // Rows with no user that still belong to the organization: the overdue
+  // job's and Stripe's audit entries, ORGANIZATION_CREATED, ADMIN_CREATED.
+  await prisma.auditLog.deleteMany({ where: { organizationId: { in: organizationIds } } })
   await prisma.auditLog.deleteMany({
     where: { resource: 'Organization', resourceId: { in: organizationIds } }
+  })
+  await prisma.invoiceNumberSeries.deleteMany({
+    where: { organizationId: { in: organizationIds } }
   })
   await prisma.organization.deleteMany({ where: { id: { in: organizationIds } } })
 }

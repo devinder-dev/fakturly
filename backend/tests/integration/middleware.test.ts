@@ -10,8 +10,7 @@ import {
   clearRateLimits,
   cleanupUsers,
   cleanupOrganizations,
-  uniqueSuffix,
-  prisma
+  uniqueSuffix
 } from '../helpers.ts'
 import { authenticate } from '../../src/middleware/authenticate.ts'
 import { authorize } from '../../src/middleware/authorize.ts'
@@ -175,6 +174,39 @@ describe('🏢 the organization claim', () => {
     expect((await get('/auth/me', `Bearer ${sign(claims)}`)).statusCode).toBe(401)
   })
 
+  test('a customer token carries NO organization, and works', async () => {
+    const res = await get('/auth/me', `Bearer ${clientToken}`)
+
+    expect(res.statusCode).toBe(200)
+    // A customer login belongs to no organization (ADR 56); its sellers are
+    // at GET /clients/me.
+    expect(res.json().user.organization).toBeNull()
+    const claims = JSON.parse(Buffer.from(clientToken.split('.')[1]!, 'base64url').toString())
+    expect(claims).not.toHaveProperty('org')
+  })
+
+  test('a correctly signed customer token WITH an organization is refused', async () => {
+    // It describes a customer bound to one seller — a shape that no longer
+    // exists, so nothing should be allowed to act on it.
+    const sign = createSigner({
+      key: env.JWT_SECRET,
+      algorithm: 'HS256',
+      expiresIn: 60_000,
+      iss: 'fakturly',
+      aud: 'fakturly-api'
+    })
+    const token = sign({ sub: clientId, role: 'CLIENT', org: organizationId, jti: randomUUID() })
+
+    expect((await get('/auth/me', `Bearer ${token}`)).statusCode).toBe(401)
+  })
+
+  test('the signer refuses to mint either wrong combination', () => {
+    // A bug in the caller, caught when the token is made rather than at the
+    // next request.
+    expect(() => createAccessToken(adminId, 'ADMIN', null)).toThrow()
+    expect(() => createAccessToken(clientId, 'CLIENT', organizationId)).toThrow()
+  })
+
   test('🔒 a token with no audience at all is refused, not waved through the audience pin', async () => {
     // fast-jwt only checks aud when the claim is present. Signed with OUR
     // secret, a token minted for no audience used to verify fine.
@@ -254,11 +286,14 @@ describe('a misconfigured route fails CLOSED', () => {
 describe('a token outliving its user', () => {
   test('stops working once the user is deleted', async () => {
     const ghost = await createTestUser(organizationId, `ghost-${suffix}@exempel.se`, 'CLIENT')
-    const token = createAccessToken(ghost.id, 'CLIENT', organizationId).token
+    // A customer login: no organization in the token (ADR 56).
+    const token = createAccessToken(ghost.id, 'CLIENT', null).token
 
     expect((await get('/auth/me', `Bearer ${token}`)).statusCode).toBe(200)
 
-    await prisma.user.delete({ where: { id: ghost.id } })
+    // cleanupUsers, not user.delete: the login has a customer record, which
+    // the foreign key refuses to orphan.
+    await cleanupUsers([ghost.id])
 
     expect((await get('/auth/me', `Bearer ${token}`)).statusCode).toBe(401)
   })

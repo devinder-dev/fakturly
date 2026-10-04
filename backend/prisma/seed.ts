@@ -101,6 +101,7 @@ async function main() {
     action: AuditAction.ADMIN_CREATED,
     resource: AuditResource.USER,
     userId: null,
+    organizationId: organization.id,
     resourceId: admin.id
   })
 

@@ -13,7 +13,7 @@ import * as pdfService from '../services/pdf.service.tsx'
 import { formatOre, totalDueOre } from '../lib/money.ts'
 import { UnauthenticatedError } from '../lib/errors.ts'
 import type { InvoiceRecord } from '../repositories/invoice.repository.ts'
-import type { AuthenticatedUser } from '../types/auth.ts'
+import { toActor, type AuthenticatedUser } from '../types/auth.ts'
 
 /**
  * Shapes an invoice for the API.
@@ -29,6 +29,9 @@ export function toPublicInvoice(invoice: InvoiceRecord) {
   return {
     id: invoice.id,
     invoiceNumber: invoice.invoiceNumber,
+    // Who issued it. A customer of two sellers sees both sellers' invoices
+    // in one list, and "2026-0001" alone no longer says whose it is.
+    seller: { id: invoice.organization.id, name: invoice.organization.name },
     clientId: invoice.clientId,
     status: invoice.status,
     type: invoice.type,
@@ -107,7 +110,7 @@ export async function createInvoice(request: FastifyRequest, reply: FastifyReply
 
   const invoice = await invoiceService.createInvoice(
     input,
-    admin.id,
+    toActor(admin),
     requestContext(request)
   )
 
@@ -169,7 +172,7 @@ export async function sendInvoice(request: FastifyRequest, reply: FastifyReply) 
   const { id } = idParamSchema.parse(request.params)
   const admin = requireCaller(request)
 
-  const invoice = await invoiceService.sendInvoice(id, admin.id, requestContext(request))
+  const invoice = await invoiceService.sendInvoice(id, toActor(admin), requestContext(request))
 
   return reply.code(200).send({ invoice: toPublicInvoice(invoice) })
 }
@@ -185,7 +188,7 @@ export async function createCreditNote(request: FastifyRequest, reply: FastifyRe
   const { id } = idParamSchema.parse(request.params)
   const admin = requireCaller(request)
 
-  const result = await invoiceService.issueCreditNote(id, admin.id, requestContext(request))
+  const result = await invoiceService.issueCreditNote(id, toActor(admin), requestContext(request))
 
   return reply.code(201).send({
     creditNote: toPublicInvoice(result.creditNote),
@@ -198,7 +201,7 @@ export async function sendReminder(request: FastifyRequest, reply: FastifyReply)
   const { id } = idParamSchema.parse(request.params)
   const admin = requireCaller(request)
 
-  const outcome = await invoiceService.sendReminder(id, admin.id, requestContext(request))
+  const outcome = await invoiceService.sendReminder(id, toActor(admin), requestContext(request))
 
   return reply.code(200).send({
     invoice: toPublicInvoice(outcome.invoice),
@@ -210,7 +213,7 @@ export async function deleteInvoice(request: FastifyRequest, reply: FastifyReply
   const { id } = idParamSchema.parse(request.params)
   const admin = requireCaller(request)
 
-  await invoiceService.deleteDraft(id, admin.id, requestContext(request))
+  await invoiceService.deleteDraft(id, toActor(admin), requestContext(request))
 
   return reply.code(204).send()
 }
@@ -228,7 +231,7 @@ export async function createPaymentLink(request: FastifyRequest, reply: FastifyR
   const { id } = idParamSchema.parse(request.params)
   const admin = requireCaller(request)
 
-  const link = await paymentService.createPaymentLink(id, admin.id, requestContext(request))
+  const link = await paymentService.createPaymentLink(id, toActor(admin), requestContext(request))
 
   return reply.code(201).send({ paymentUrl: link.url, sessionId: link.sessionId })
 }

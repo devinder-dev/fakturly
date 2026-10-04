@@ -52,13 +52,16 @@ export async function authenticate(request: FastifyRequest): Promise<void> {
   // and re-reading from the database also means a role changed five minutes
   // ago is not stale for the remaining life of the token.
   //
-  // organizationId is the tenant every scoped query will filter on. It comes
-  // from the signed token, so no header, body or URL can choose it.
-  request.authUser = {
-    id: claims.sub,
-    role: claims.role,
-    organizationId: claims.org,
-    jti: claims.jti,
-    expiresAtEpoch: claims.exp
+  // organizationId is the tenant every staff query filters on. It comes from
+  // the signed token, so no header, body or URL can choose it. A customer has
+  // none. verifyAccessToken already refused every other combination; the
+  // check is repeated rather than papered over with a fallback, because an
+  // admin with an EMPTY org is exactly the state that must never exist.
+  const base = { id: claims.sub, jti: claims.jti, expiresAtEpoch: claims.exp }
+  if (claims.role === 'ADMIN') {
+    if (!claims.org) throw new UnauthenticatedError()
+    request.authUser = { ...base, role: 'ADMIN', organizationId: claims.org }
+  } else {
+    request.authUser = { ...base, role: 'CLIENT', organizationId: null }
   }
 }

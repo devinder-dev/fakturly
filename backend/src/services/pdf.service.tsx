@@ -45,7 +45,9 @@ export type RenderedPdf = {
  * client see this invoice" rule here to drift out of sync.
  */
 export async function renderInvoicePdf(invoice: InvoiceRecord): Promise<RenderedPdf> {
-  const client = await clientRepository.findClientById(invoice.clientId)
+  // The invoice was loaded through an ownership check already; its client is
+  // looked up within the same organization, never by id alone.
+  const client = await clientRepository.findClientById(invoice.organizationId, invoice.clientId)
   if (!client) {
     throw new NotFoundError('Kunden')
   }

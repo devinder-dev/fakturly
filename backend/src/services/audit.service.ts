@@ -72,9 +72,18 @@ export const AuditResource = {
   ORGANIZATION: 'Organization'
 } as const
 
-export type AuditInput = Omit<AuditEntry, 'action' | 'resource'> & {
+export type AuditInput = Omit<AuditEntry, 'action' | 'resource' | 'organizationId'> & {
   action: AuditActionType
   resource: string
+  /**
+   * REQUIRED, even though null is allowed. Optional would let a call site
+   * forget it and file the event under no organization — invisible to that
+   * organization's admin, forever, since audit rows are never updated. As a
+   * required key, every call site had to decide, and the compiler found them
+   * all. null means "belongs to no organization": an unknown email's failed
+   * login, a customer's own login (ADR 56).
+   */
+  organizationId: string | null
 }
 
 /**

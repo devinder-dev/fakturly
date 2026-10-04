@@ -37,6 +37,11 @@ export type OverdueRunSummary = {
  * means "what happens 400 days late" is a one-line test.
  */
 export async function runOverdueCheck(now: Date = new Date()): Promise<OverdueRunSummary> {
+  // DELIBERATELY CROSS-TENANT (ADR 56): one nightly job serves every
+  // organization, so this query has no organization filter. Each write below
+  // carries the invoice's own organization, so nothing is ever filed under
+  // the wrong one.
+  //
   // Only SENT and OVERDUE invoices can accrue. A DRAFT was never issued, and
   // a PAID one is settled.
   const candidates = await prisma.invoice.findMany({
@@ -50,6 +55,7 @@ export async function runOverdueCheck(now: Date = new Date()): Promise<OverdueRu
     },
     select: {
       id: true,
+      organizationId: true,
       invoiceNumber: true,
       status: true,
       dueDate: true,
@@ -86,6 +92,7 @@ export async function runOverdueCheck(now: Date = new Date()): Promise<OverdueRu
     }
 
     await applyOverdue({
+      organizationId: invoice.organizationId,
       invoiceId: invoice.id,
       invoiceNumber: invoice.invoiceNumber,
       newLateFeeOre: Math.max(invoice.lateFeeOre, totalOwed),
@@ -127,6 +134,7 @@ export async function runOverdueCheck(now: Date = new Date()): Promise<OverdueRu
  * invoice — which is what makes it explainable line by line.
  */
 async function applyOverdue(params: {
+  organizationId: string
   invoiceId: string
   invoiceNumber: string
   newLateFeeOre: number
@@ -139,7 +147,12 @@ async function applyOverdue(params: {
     // The status guard is in the WHERE clause, so an invoice paid between the
     // query above and this write is not marked overdue after the fact.
     const updated = await tx.invoice.updateMany({
-      where: { id: params.invoiceId, type: 'INVOICE', status: { in: ['SENT', 'OVERDUE'] } },
+      where: {
+        id: params.invoiceId,
+        organizationId: params.organizationId,
+        type: 'INVOICE',
+        status: { in: ['SENT', 'OVERDUE'] }
+      },
       data: { status: 'OVERDUE', lateFeeOre: params.newLateFeeOre }
     })
 
@@ -148,6 +161,7 @@ async function applyOverdue(params: {
     if (params.incrementOre > 0) {
       await tx.transaction.create({
         data: {
+          organizationId: params.organizationId,
           invoiceId: params.invoiceId,
           type: 'LATE_FEE_ADDED',
           amountOre: params.incrementOre,
@@ -165,6 +179,7 @@ async function applyOverdue(params: {
       action: AuditAction.INVOICE_OVERDUE,
       resource: AuditResource.INVOICE,
       // No acting user: this was the scheduler, not a person.
+      organizationId: params.organizationId,
       resourceId: params.invoiceId
     })
   }

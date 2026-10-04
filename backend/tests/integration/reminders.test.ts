@@ -6,6 +6,7 @@ import {
   buildTestApp,
   createTestUser,
   createTestOrganization,
+  clientUserId,
   loginAs,
   authed,
   clearRateLimits,
@@ -42,7 +43,7 @@ beforeAll(async () => {
     name: 'Påminnelse AB'
   })
   clientId = created.json().client.id
-  userIds.push(created.json().client.userId)
+  userIds.push((await clientUserId(created.json().client.id)))
 })
 
 afterAll(async () => {
@@ -125,7 +126,7 @@ describe('POST /invoices/:id/reminder', () => {
 
   test('a PAID invoice cannot be reminded', async () => {
     const invoice = await issue()
-    await invoiceRepository.markPaid(invoice.id, { stripePaymentId: `pi_rem_${suffix}`, amountOre: invoice.grossTotalOre })
+    await invoiceRepository.markPaid(organizationId, invoice.id, { stripePaymentId: `pi_rem_${suffix}`, amountOre: invoice.grossTotalOre })
     const res = await asAdmin()('POST', `/invoices/${invoice.id}/reminder`)
     expect(res.statusCode).toBe(422)
   })

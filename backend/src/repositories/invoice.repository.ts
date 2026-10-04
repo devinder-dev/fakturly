@@ -1,4 +1,10 @@
 // invoice.repository.ts — database queries for Invoice.
+//
+// Tenant-scoped (ADR 56): every function takes the organizationId FIRST and
+// puts it in every WHERE, so another organization's invoice is simply not
+// found — answered as 404, exactly like an id that never existed. The one
+// deliberate crossing is named for it: findInvoiceByIdUnscoped, for the
+// Stripe webhook, which is told an invoice id and nothing else.
 
 import { prisma } from '../lib/prisma.ts'
 import type { InvoiceStatus, InvoiceType, TransactionType, Prisma } from '../generated/prisma/client.ts'
@@ -7,6 +13,10 @@ import type { InvoiceStatus, InvoiceType, TransactionType, Prisma } from '../gen
 const invoiceSelect = {
   id: true,
   invoiceNumber: true,
+  organizationId: true,
+  // The seller, by name: a customer of two sellers sees both sellers'
+  // invoices in one list, and the portal groups them by this.
+  organization: { select: { id: true, name: true } },
   clientId: true,
   currency: true,
   status: true,
@@ -81,6 +91,8 @@ export type LedgerRow = {
 export type InvoiceRecord = {
   id: string
   invoiceNumber: string
+  organizationId: string
+  organization: { id: string; name: string }
   clientId: string
   currency: string
   status: InvoiceStatus
@@ -146,10 +158,14 @@ export type CreateInvoiceData = {
  * duplicate, which is not.
  */
 export async function createInvoiceWithItems(
+  organizationId: string,
   data: CreateInvoiceData
 ): Promise<InvoiceRecord> {
   return prisma.invoice.create({
     data: {
+      // With clientId, the composite foreign key: the database itself refuses
+      // this row if the client is not THIS organization's.
+      organizationId,
       invoiceNumber: data.invoiceNumber,
       clientId: data.clientId,
       dueDate: data.dueDate,
@@ -181,10 +197,13 @@ export async function createInvoiceWithItems(
  * two ledger rows are written for one invoice. With it, the second update
  * matches no rows and returns null.
  */
-export async function markSent(id: string): Promise<InvoiceRecord | null> {
+export async function markSent(
+  organizationId: string,
+  id: string
+): Promise<InvoiceRecord | null> {
   return prisma.$transaction(async (tx) => {
     const updated = await tx.invoice.updateMany({
-      where: { id, status: 'DRAFT' },
+      where: { id, organizationId, status: 'DRAFT' },
       data: { status: 'SENT', sentAt: new Date() }
     })
 
@@ -192,7 +211,7 @@ export async function markSent(id: string): Promise<InvoiceRecord | null> {
     if (updated.count === 0) return null
 
     const invoice = await tx.invoice.findUniqueOrThrow({
-      where: { id },
+      where: { id_organizationId: { id, organizationId } },
       select: invoiceSelect
     })
 
@@ -200,6 +219,7 @@ export async function markSent(id: string): Promise<InvoiceRecord | null> {
     // correction is a new row with a negative amount.
     await tx.transaction.create({
       data: {
+        organizationId,
         invoiceId: invoice.id,
         type: 'INVOICE_CREATED',
         // Gross: what the client actually owes, VAT included.
@@ -213,8 +233,45 @@ export async function markSent(id: string): Promise<InvoiceRecord | null> {
   })
 }
 
-export async function findInvoiceById(id: string): Promise<InvoiceRecord | null> {
+export async function findInvoiceById(
+  organizationId: string,
+  id: string
+): Promise<InvoiceRecord | null> {
+  return prisma.invoice.findUnique({
+    where: { id_organizationId: { id, organizationId } },
+    select: invoiceSelect
+  })
+}
+
+/**
+ * An invoice by id alone, from ANY organization. Deliberately unscoped.
+ *
+ * For the Stripe webhook only: Stripe tells us an invoice id and nothing
+ * else, so the organization has to be learned from the row. The caller then
+ * cross-checks it against the organization recorded in the checkout
+ * session, and does every write scoped to it. Anywhere else, this is the
+ * bug that leaks one company's invoices to another — hence the name, so
+ * `grep -rn Unscoped src` lists every crossing there is.
+ */
+export async function findInvoiceByIdUnscoped(id: string): Promise<InvoiceRecord | null> {
   return prisma.invoice.findUnique({ where: { id }, select: invoiceSelect })
+}
+
+/**
+ * An invoice, if it is addressed to one of these customer records.
+ *
+ * The portal's read. Scoped by the caller's own Client ids — one per seller
+ * they buy from — not by an organization: a customer of two sellers may see
+ * both sellers' invoices, and nobody else's.
+ */
+export async function findInvoiceOfClients(
+  clientIds: string[],
+  id: string
+): Promise<InvoiceRecord | null> {
+  return prisma.invoice.findFirst({
+    where: { id, clientId: { in: clientIds } },
+    select: invoiceSelect
+  })
 }
 
 export type ListInvoicesFilter = {
@@ -222,7 +279,7 @@ export type ListInvoicesFilter = {
   offset: number
   status?: InvoiceStatus | undefined
   type?: InvoiceType | undefined
-  /** When set, only this client's invoices. This is how a CLIENT is scoped. */
+  /** When set, only this customer's invoices — within the organization. */
   clientId?: string | undefined
 }
 
@@ -231,11 +288,39 @@ export type ListInvoicesResult = {
   total: number
 }
 
+/** An organization's invoices — the admin list. */
 export async function listInvoices(
+  organizationId: string,
   filter: ListInvoicesFilter
 ): Promise<ListInvoicesResult> {
-  const where = {
-    ...(filter.clientId ? { clientId: filter.clientId } : {}),
+  return pageOfInvoices(
+    {
+      organizationId,
+      ...(filter.clientId ? { clientId: filter.clientId } : {})
+    },
+    filter
+  )
+}
+
+/** Invoices addressed to these customer records — the portal list, across
+ *  every seller the caller buys from. */
+export async function listInvoicesOfClients(
+  clientIds: string[],
+  filter: Omit<ListInvoicesFilter, 'clientId'>
+): Promise<ListInvoicesResult> {
+  return pageOfInvoices({ clientId: { in: clientIds } }, filter)
+}
+
+/**
+ * One page plus its total. Private: callers go through the two functions
+ * above, so no caller can ask for a page with no scope at all.
+ */
+async function pageOfInvoices(
+  scope: Prisma.InvoiceWhereInput,
+  filter: Omit<ListInvoicesFilter, 'clientId'>
+): Promise<ListInvoicesResult> {
+  const where: Prisma.InvoiceWhereInput = {
+    ...scope,
     ...(filter.status ? { status: filter.status } : {}),
     ...(filter.type ? { type: filter.type } : {})
   }
@@ -273,10 +358,11 @@ export async function listInvoices(
  * handled", not as an error.
  */
 export async function markPaid(
+  organizationId: string,
   id: string,
   payment: { stripePaymentId: string; amountOre: number }
 ): Promise<InvoiceRecord | null> {
-  return prisma.$transaction((tx) => markPaidWithin(tx, id, payment))
+  return prisma.$transaction((tx) => markPaidWithin(tx, organizationId, id, payment))
 }
 
 /**
@@ -286,6 +372,7 @@ export async function markPaid(
  */
 export async function markPaidWithin(
   tx: Prisma.TransactionClient,
+  organizationId: string,
   id: string,
   payment: { stripePaymentId: string; amountOre: number }
 ): Promise<InvoiceRecord | null> {
@@ -293,7 +380,7 @@ export async function markPaidWithin(
     const updated = await tx.invoice.updateMany({
       // type: INVOICE — a credit note is never paid; it is money going the
       // other way, and settling it here would record a phantom receipt.
-      where: { id, type: 'INVOICE', status: { in: ['SENT', 'OVERDUE'] } },
+      where: { id, organizationId, type: 'INVOICE', status: { in: ['SENT', 'OVERDUE'] } },
       data: {
         status: 'PAID',
         paidAt: new Date(),
@@ -304,12 +391,13 @@ export async function markPaidWithin(
     if (updated.count === 0) return null
 
     const invoice = await tx.invoice.findUniqueOrThrow({
-      where: { id },
+      where: { id_organizationId: { id, organizationId } },
       select: invoiceSelect
     })
 
     await tx.transaction.create({
       data: {
+        organizationId,
         invoiceId: invoice.id,
         type: 'PAYMENT_RECEIVED',
         // The amount Stripe actually collected, not what we expected. If they
@@ -327,20 +415,23 @@ export async function markPaidWithin(
 
 /** Stores the Stripe checkout session id on an invoice. */
 export async function attachCheckoutSession(
+  organizationId: string,
   id: string,
   sessionId: string
 ): Promise<void> {
-  await prisma.invoice.update({
-    where: { id },
+  await prisma.invoice.updateMany({
+    where: { id, organizationId },
     data: { stripePaymentId: sessionId }
   })
 }
 
 /** Deletes a DRAFT invoice. Items cascade; see the schema. */
-export async function deleteDraftInvoice(id: string): Promise<boolean> {
+export async function deleteDraftInvoice(organizationId: string, id: string): Promise<boolean> {
   // The status condition is in the WHERE clause, not just checked beforehand.
   // A check-then-delete could race with a send.
-  const result = await prisma.invoice.deleteMany({ where: { id, status: 'DRAFT' } })
+  const result = await prisma.invoice.deleteMany({
+    where: { id, organizationId, status: 'DRAFT' }
+  })
   return result.count > 0
 }
 
@@ -385,23 +476,34 @@ export type CreateCreditNoteData = {
  * credited it first.
  */
 export async function createCreditNote(
+  organizationId: string,
   data: CreateCreditNoteData
 ): Promise<{ creditNote: InvoiceRecord; original: InvoiceRecord } | null> {
+  const original = { id_organizationId: { id: data.originalId, organizationId } }
+
   return prisma.$transaction(async (tx) => {
     const before = await tx.invoice.findUnique({
-      where: { id: data.originalId },
+      where: original,
       select: { lateFeeOre: true, reminderFeeOre: true, invoiceNumber: true }
     })
     if (!before) return null
 
     const cancelled = await tx.invoice.updateMany({
-      where: { id: data.originalId, type: 'INVOICE', status: { in: ['SENT', 'OVERDUE'] } },
+      where: {
+        id: data.originalId,
+        organizationId,
+        type: 'INVOICE',
+        status: { in: ['SENT', 'OVERDUE'] }
+      },
       data: { status: 'CREDITED' }
     })
     if (cancelled.count === 0) return null
 
     const creditNote = await tx.invoice.create({
       data: {
+        // Same organization as the original — and the same series: the law
+        // counts a credit note as an invoice.
+        organizationId,
         invoiceNumber: data.creditNoteNumber,
         clientId: data.clientId,
         currency: data.currency,
@@ -423,6 +525,7 @@ export async function createCreditNote(
 
     await tx.transaction.create({
       data: {
+        organizationId,
         invoiceId: data.originalId,
         type: 'CREDIT_NOTE_ISSUED',
         amountOre: data.grossTotalOre, // already negative
@@ -434,6 +537,7 @@ export async function createCreditNote(
     if (before.lateFeeOre > 0) {
       await tx.transaction.create({
         data: {
+          organizationId,
           invoiceId: data.originalId,
           type: 'LATE_FEE_WAIVED',
           amountOre: -before.lateFeeOre,
@@ -446,6 +550,7 @@ export async function createCreditNote(
     if (before.reminderFeeOre > 0) {
       await tx.transaction.create({
         data: {
+          organizationId,
           invoiceId: data.originalId,
           type: 'REMINDER_FEE_WAIVED',
           amountOre: -before.reminderFeeOre,
@@ -455,12 +560,12 @@ export async function createCreditNote(
       })
     }
 
-    const original = await tx.invoice.findUniqueOrThrow({
-      where: { id: data.originalId },
+    const updatedOriginal = await tx.invoice.findUniqueOrThrow({
+      where: original,
       select: invoiceSelect
     })
 
-    return { creditNote, original }
+    return { creditNote, original: updatedOriginal }
   })
 }
 
@@ -479,21 +584,32 @@ export async function createCreditNote(
  * open). The caller may still send the email; it just cannot charge again.
  */
 export async function chargeReminderFee(
+  organizationId: string,
   id: string,
   feeOre: number,
   sentAt: Date
 ): Promise<InvoiceRecord | null> {
   return prisma.$transaction(async (tx) => {
     const updated = await tx.invoice.updateMany({
-      where: { id, type: 'INVOICE', status: { in: ['SENT', 'OVERDUE'] }, reminderFeeOre: 0 },
+      where: {
+        id,
+        organizationId,
+        type: 'INVOICE',
+        status: { in: ['SENT', 'OVERDUE'] },
+        reminderFeeOre: 0
+      },
       data: { reminderFeeOre: feeOre, reminderSentAt: sentAt }
     })
     if (updated.count === 0) return null
 
-    const invoice = await tx.invoice.findUniqueOrThrow({ where: { id }, select: invoiceSelect })
+    const invoice = await tx.invoice.findUniqueOrThrow({
+      where: { id_organizationId: { id, organizationId } },
+      select: invoiceSelect
+    })
 
     await tx.transaction.create({
       data: {
+        organizationId,
         invoiceId: id,
         type: 'REMINDER_FEE_ADDED',
         amountOre: feeOre,
@@ -507,6 +623,13 @@ export async function chargeReminderFee(
 }
 
 /** A repeat reminder: the timestamp moves, no fee is added. */
-export async function markReminderSent(id: string, sentAt: Date): Promise<void> {
-  await prisma.invoice.update({ where: { id }, data: { reminderSentAt: sentAt } })
+export async function markReminderSent(
+  organizationId: string,
+  id: string,
+  sentAt: Date
+): Promise<void> {
+  await prisma.invoice.updateMany({
+    where: { id, organizationId },
+    data: { reminderSentAt: sentAt }
+  })
 }

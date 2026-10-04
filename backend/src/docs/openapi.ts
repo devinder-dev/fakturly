@@ -111,7 +111,8 @@ const components = {
         role: { type: 'string', enum: ['ADMIN', 'CLIENT'] },
         organization: {
           type: 'object',
-          description: 'The tenant the user belongs to. Its id is also the `org` claim of the access token.',
+          nullable: true,
+          description: 'ADMIN: the organization they work for — its id is also the `org` claim of the access token. CLIENT: null; a customer login belongs to no organization, and its sellers are listed at GET /clients/me.',
           properties: { id: { type: 'string' }, name: { type: 'string' } }
         }
       }
@@ -146,7 +147,8 @@ const components = {
       description: 'Amounts are integer öre. The `formatted` strings are for display only.',
       properties: {
         id: { type: 'string' },
-        invoiceNumber: { type: 'string', example: '2026-0007', description: 'Unbroken yearly series, allocated server-side' },
+        invoiceNumber: { type: 'string', example: '2026-0007', description: 'Unbroken yearly series per organization, allocated server-side' },
+        seller: { type: 'object', description: 'The organization that issued the invoice', properties: { id: { type: 'string' }, name: { type: 'string' } } },
         clientId: { type: 'string' },
         status: { type: 'string', enum: ['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CREDITED'] },
         type: { type: 'string', enum: ['INVOICE', 'CREDIT_NOTE'] },
@@ -263,13 +265,13 @@ export const paths: Record<string, Record<string, unknown>> = {
     },
     post: {
       tags: ['Clients'], summary: 'Provision a client', ...admin,
-      description: 'Creates the User and Client rows atomically and emails a set-password invite. There is no public registration. `role` is never accepted from the body.',
+      description: "Adds a customer to the caller's organization. A new address gets a login and a set-password invite; an address that already has a login (a customer of another seller) gets a customer record here and a notification. The 201 is identical either way, and carries no login id, so the response never reveals another organization's customers. There is no public registration. `role` and `organizationId` are never accepted from the body.",
       requestBody: { required: true, content: { 'application/json': { schema: fromZod(createClientSchema) } } },
-      responses: { ...admin.responses, 201: clientResponse, 409: errorResponse('Email already registered (message deliberately vague)') }
+      responses: { ...admin.responses, 201: clientResponse, 409: errorResponse('This organization already has a customer with that email (message deliberately vague)') }
     }
   },
   '/clients/me': {
-    get: { tags: ['Clients'], summary: "The caller's own client record", ...anyRole, responses: { ...anyRole.responses, 200: clientResponse, 403: errorResponse('The caller is an ADMIN, who has no client record') } }
+    get: { tags: ['Clients'], summary: "The caller's own customer records — one per seller", ...anyRole, responses: { ...anyRole.responses, 200: json({ type: 'object', properties: { clients: { type: 'array', items: { allOf: [{ $ref: '#/components/schemas/Client' }, { type: 'object', properties: { seller: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' } } } } }] } } } }), 403: errorResponse('The caller is an ADMIN, who has no customer records') } }
   },
   '/clients/{id}': {
     get: { tags: ['Clients'], summary: 'One client', ...anyRole, parameters: [idParam], description: "A client may read only their own record. Anyone else's answers 404, not 403, so ids cannot be enumerated.", responses: { ...anyRole.responses, 200: clientResponse, 404: errorResponse('Not found, or not yours') } },

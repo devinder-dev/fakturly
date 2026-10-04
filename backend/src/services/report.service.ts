@@ -15,6 +15,7 @@ import { buildSie, encodeCp437, type SieVerification, type SieAccount } from '..
 import { env } from '../lib/env.ts'
 import { record, AuditAction } from './audit.service.ts'
 import type { RequestContext } from './auth.service.ts'
+import type { Actor } from '../types/auth.ts'
 
 // ─────────────────────────────────────────────────────────────
 // Aging — kundreskontra
@@ -311,7 +312,7 @@ export type SieExport = {
 
 export async function sieExport(
   year: number,
-  actingAdminId: string,
+  actor: Actor,
   context: RequestContext = {}
 ): Promise<SieExport> {
   const rows = await reportRepository.findLedgerRowsForYear(year)
@@ -339,7 +340,8 @@ export async function sieExport(
     action: AuditAction.REPORT_EXPORTED,
     resource: 'Report',
     resourceId: `sie:${year}`,
-    userId: actingAdminId,
+    userId: actor.userId,
+    organizationId: actor.organizationId,
     ipAddress: context.ip,
     userAgent: context.userAgent
   })

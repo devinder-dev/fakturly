@@ -13,6 +13,7 @@ import {
 import * as reportService from '../services/report.service.ts'
 import { formatOre } from '../lib/money.ts'
 import { UnauthenticatedError } from '../lib/errors.ts'
+import { toActor } from '../types/auth.ts'
 
 /**
  * A downloadable file. `attachment` so the browser saves rather than shows,
@@ -71,7 +72,7 @@ export async function sie(request: FastifyRequest, reply: FastifyReply) {
   const caller = request.authUser
   if (!caller) throw new UnauthenticatedError()
 
-  const file = await reportService.sieExport(query.year, caller.id, {
+  const file = await reportService.sieExport(query.year, toActor(caller), {
     ip: clientIp(request),
     userAgent: request.headers['user-agent']?.slice(0, 500)
   })

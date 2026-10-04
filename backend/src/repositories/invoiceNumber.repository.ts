@@ -3,11 +3,15 @@
 // Bokföringslagen requires invoice numbers to form an unbroken series. The
 // point is that you cannot delete an invoice and hide the fact: if 2026-0007
 // is missing, that absence is visible and must be explained.
+//
+// One series PER ORGANIZATION and year (ADR 56). The law speaks of a
+// business's own series; two companies sharing one counter would each see
+// holes that are really the other company's invoices.
 
 import { prisma } from '../lib/prisma.ts'
 
 /**
- * Allocates the next number for a year, atomically.
+ * Allocates an organization's next number for a year, atomically.
  *
  * The whole operation is ONE statement. INSERT ... ON CONFLICT DO UPDATE is
  * atomic in Postgres, so two concurrent invoice creations cannot receive the
@@ -28,11 +32,16 @@ import { prisma } from '../lib/prisma.ts'
  * a gap. That is the same behaviour a Postgres sequence has. A gap is
  * explainable; a duplicate or a silently reused number is not.
  */
-export async function allocateInvoiceNumber(year: number): Promise<string> {
+export async function allocateInvoiceNumber(
+  organizationId: string,
+  year: number
+): Promise<string> {
+  // Tagged template, so both values are bound parameters — never spliced
+  // into the SQL text.
   const rows = await prisma.$queryRaw<Array<{ lastNumber: number }>>`
-    INSERT INTO "InvoiceNumberSeries" ("year", "lastNumber")
-    VALUES (${year}, 1)
-    ON CONFLICT ("year")
+    INSERT INTO "InvoiceNumberSeries" ("organizationId", "year", "lastNumber")
+    VALUES (${organizationId}, ${year}, 1)
+    ON CONFLICT ("organizationId", "year")
     DO UPDATE SET "lastNumber" = "InvoiceNumberSeries"."lastNumber" + 1
     RETURNING "lastNumber"
   `
@@ -47,8 +56,10 @@ export async function allocateInvoiceNumber(year: number): Promise<string> {
   return `${year}-${String(next).padStart(4, '0')}`
 }
 
-/** Current allocation for a year. Read-only; used by tests and reporting. */
-export async function peekLastNumber(year: number): Promise<number> {
-  const row = await prisma.invoiceNumberSeries.findUnique({ where: { year } })
+/** An organization's current allocation for a year. Read-only. */
+export async function peekLastNumber(organizationId: string, year: number): Promise<number> {
+  const row = await prisma.invoiceNumberSeries.findUnique({
+    where: { organizationId_year: { organizationId, year } }
+  })
   return row?.lastNumber ?? 0
 }

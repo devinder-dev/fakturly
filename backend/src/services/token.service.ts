@@ -32,17 +32,20 @@ const REFRESH_TOKEN_MS = env.REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000
  *
  * A JWT is base64, not encryption. Anyone holding it can read every claim.
  * So: no email, no name, no invoice data. Only an opaque user id, the role and
- * the organization id we need for authorisation.
+ * — for staff — the organization id we need for authorisation.
  */
 export type AccessTokenClaims = {
   /** Subject — the user id. */
   sub: string
   role: Role
   /**
-   * The caller's organization id. An opaque cuid, not PII. Carried in the
-   * token so scoping a query to the caller's tenant costs no database lookup.
+   * The staff member's organization id: an opaque cuid, not PII. Carried in
+   * the token so scoping a query to the caller's tenant costs no database
+   * lookup. Present on every ADMIN token and on no CLIENT token — a customer
+   * login belongs to no organization (ADR 56). verifyAccessToken enforces
+   * both halves.
    */
-  org: string
+  org?: string
   /** JWT ID — unique per token. This is what logout adds to the denylist. */
   jti: string
   iat: number
@@ -71,16 +74,12 @@ const verifyAccessTokenSignature = createVerifier({
   algorithms: ['HS256'],
   allowedIss: ISSUER,
   allowedAud: AUDIENCE,
-  // `org` is required, so a token minted before multi-tenancy is rejected
-  // outright: the client gets one 401, refreshes, and the refresh reads the
-  // organization from the database. Accepting it instead would leave a caller
-  // with NO tenant in the system for up to 15 minutes — a state every scoped
-  // query after this would have to remember to handle.
-  //
-  // iss and aud are listed too, because allowedIss/allowedAud only check a
-  // claim that is PRESENT: fast-jwt skips the validator when the claim is
-  // missing, so a token with no `aud` at all would pass the audience pin.
-  requiredClaims: ['sub', 'jti', 'exp', 'role', 'org', 'iss', 'aud']
+  // iss and aud are listed because allowedIss/allowedAud only check a claim
+  // that is PRESENT: fast-jwt skips the validator when the claim is missing,
+  // so a token with no `aud` at all would pass the audience pin. `org` is not
+  // here: whether it must be present depends on the role, which a static
+  // list cannot express. verifyAccessToken checks it.
+  requiredClaims: ['sub', 'jti', 'exp', 'role', 'iss', 'aud']
 })
 
 // ─────────────────────────────────────────────────────────────
@@ -93,13 +92,27 @@ export type CreatedAccessToken = {
   expiresAt: Date
 }
 
+/**
+ * organizationId is the staff member's organization, and must be null for a
+ * customer login. Passing the wrong combination is a bug in the caller, not
+ * a token to mint: refused here rather than discovered at the next request.
+ */
 export function createAccessToken(
   userId: string,
   role: Role,
-  organizationId: string
+  organizationId: string | null
 ): CreatedAccessToken {
+  if ((role === 'ADMIN') !== (organizationId !== null)) {
+    throw new Error(`createAccessToken: a ${role} token ${organizationId ? 'must not' : 'must'} carry an organization`)
+  }
+
   const jti = randomUUID()
-  const token = signAccessToken({ sub: userId, role, org: organizationId, jti })
+  const token = signAccessToken({
+    sub: userId,
+    role,
+    ...(organizationId !== null ? { org: organizationId } : {}),
+    jti
+  })
 
   return {
     token,
@@ -124,9 +137,20 @@ export function verifyAccessToken(token: string): AccessTokenClaims {
   try {
     const claims = verifyAccessTokenSignature(token) as AccessTokenClaims
 
-    // requiredClaims proves `org` is present, not that it is usable: `null`
-    // or "" would pass, and every scoped query would then filter on nothing.
-    if (typeof claims.org !== 'string' || claims.org === '') {
+    // The org rule, by role. An ADMIN token without a usable org would leave
+    // a caller with NO tenant — every scoped query would filter on nothing.
+    // (requiredClaims could only prove presence: `null` or "" would pass.)
+    // A token minted before multi-tenancy has none, so it is refused: one
+    // 401, the frontend refreshes, and the refresh reads the org from the
+    // database. A CLIENT token WITH an org is refused just as firmly: it
+    // describes a customer bound to one seller, which no longer exists.
+    if (claims.role === 'ADMIN') {
+      if (typeof claims.org !== 'string' || claims.org === '') {
+        throw new UnauthenticatedError()
+      }
+    } else if (claims.role === 'CLIENT') {
+      if ('org' in claims) throw new UnauthenticatedError()
+    } else {
       throw new UnauthenticatedError()
     }
     return claims

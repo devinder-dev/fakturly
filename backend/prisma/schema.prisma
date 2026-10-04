@@ -15,7 +15,7 @@ datasource db {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Organizations — the tenant. Every user belongs to exactly one.
+// Organizations — the tenant. Every row of a company's data points here.
 // ─────────────────────────────────────────────────────────────
 
 /// The company that issues invoices. Replaces the single seller that used to
@@ -31,6 +31,8 @@ model Organization {
 
   /// Stored normalised as NNNNNN-NNNN (see organization.validator.ts), so the
   /// unique index cannot be dodged by writing the same number without a dash.
+  /// A CHECK constraint (migration tenant_scoped_data) enforces that format in
+  /// the database too, below anything a raw-SQL script could do.
   orgNumber String  @unique
   vatNumber String?
   address   String
@@ -42,9 +44,14 @@ model Organization {
   /// Default payment terms for new invoices. 30 is the Swedish norm.
   paymentTermsDays Int     @default(30)
 
-  users     User[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  users          User[]
+  clients        Client[]
+  invoices       Invoice[]
+  transactions   Transaction[]
+  auditLogs      AuditLog[]
+  invoiceNumbers InvoiceNumberSeries[]
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -53,18 +60,22 @@ model Organization {
 
 model User {
   id             String          @id @default(cuid())
-  email          String          @unique // globally unique: one user = one org (ADR 56)
+  email          String          @unique // the login identity, unique across all organizations (ADR 56)
   password       String // Argon2id-hash — aldrig lösenord i klartext
   role           Role            @default(CLIENT)
   failedLogins   Int             @default(0) // räknar misslyckade inloggningar
   lockedUntil    DateTime? // konto låst till denna tidpunkt
 
-  // Restrict (the default): an organization that still has users cannot be
-  // deleted. Losing a tenant must be a deliberate, multi-step act.
-  organizationId String
-  organization   Organization    @relation(fields: [organizationId], references: [id])
+  // Staff belong to exactly one organization; a customer's login belongs to
+  // NONE — it reaches its sellers through its Client rows, one per seller.
+  // A CHECK constraint enforces it: ("role" = 'ADMIN') = ("organizationId" IS
+  // NOT NULL). Restrict (the default) on delete: an organization that still
+  // has staff cannot be deleted. Losing a tenant must be a deliberate act.
+  organizationId String?
+  organization   Organization?   @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
-  client         Client?
+  /// One customer record per seller this login buys from.
+  clients        Client[]
   auditLogs      AuditLog[]
   refreshTokens  RefreshToken[]
   passwordTokens PasswordToken[]
@@ -84,16 +95,34 @@ enum Role {
 // Kunder
 // ─────────────────────────────────────────────────────────────
 
+/// One seller's record of one customer. The same person buying from two
+/// sellers has two Client rows — one in each organization — and one login.
 model Client {
   id        String    @id @default(cuid())
   name      String
   email     String
   phone     String?
   address   String?
-  userId    String    @unique
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onUpdate: Restrict)
+
+  /// The login this customer uses for the portal. Shared by every seller the
+  /// person buys from, so it is NOT unique here — only per organization.
+  userId    String
   user      User      @relation(fields: [userId], references: [id])
   invoices  Invoice[]
   createdAt DateTime  @default(now())
+
+  // A seller has each customer once — by email and by login. Another seller
+  // having the same customer is no conflict at all.
+  @@unique([organizationId, email])
+  @@unique([organizationId, userId])
+  // The target of Invoice's composite foreign key: (id, organizationId) must
+  // be unique before another table can reference the pair.
+  @@unique([id, organizationId])
+  @@index([organizationId, createdAt]) // an admin's client list, newest first
+  @@index([userId]) // the portal: "every seller this login buys from"
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -104,10 +133,20 @@ model Invoice {
   id            String @id @default(cuid())
   // Unbroken series required by bokföringslagen. Format: "2026-0001".
   // Generated from InvoiceNumberSeries, never supplied by the caller.
-  invoiceNumber String @unique
+  // Unique per organization, not globally: each company has its own series
+  // (bokföringslagen), so Demo AB and Bergström both issue 2026-0001.
+  invoiceNumber String
 
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onUpdate: Restrict)
+
+  // COMPOSITE foreign key: the client must exist IN THIS ORGANIZATION. A
+  // plain clientId -> Client(id) key would accept company B's invoice
+  // pointing at company A's client; this one makes that row impossible in
+  // SQL, whatever the code above it gets wrong. Restrict on update: the
+  // pair a row points at may never be rewritten underneath it.
   clientId String
-  client   Client @relation(fields: [clientId], references: [id])
+  client   Client @relation(fields: [clientId, organizationId], references: [id, organizationId], onUpdate: Restrict)
 
   currency String        @default("SEK")
   status   InvoiceStatus @default(DRAFT)
@@ -152,8 +191,12 @@ model Invoice {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
+  @@unique([organizationId, invoiceNumber])
+  // Target of Transaction's composite foreign key.
+  @@unique([id, organizationId])
+  @@index([organizationId, createdAt]) // an admin's invoice list, newest first
   @@index([clientId, status]) // "this client's unpaid invoices"
-  @@index([status, dueDate]) // the nightly overdue job
+  @@index([status, dueDate]) // the nightly overdue job — across organizations
 }
 
 // Per-year invoice numbering.
@@ -166,9 +209,16 @@ model Invoice {
 // Gaps are possible if the surrounding transaction rolls back — the same
 // property a sequence has. That is acceptable and explainable; what the law
 // requires is that numbers are not reused or silently removed.
+//
+// One series per organization and year: the law wants an unbroken series per
+// BUSINESS, so two companies on one deployment must not share a counter.
 model InvoiceNumberSeries {
-  year       Int @id
-  lastNumber Int @default(0)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onUpdate: Restrict)
+  year           Int
+  lastNumber     Int          @default(0)
+
+  @@id([organizationId, year])
 }
 
 enum InvoiceStatus {
@@ -225,14 +275,25 @@ model InvoiceItem {
 
 model Transaction {
   id          String          @id @default(cuid())
+
+  // Denormalised from the invoice. Safe here precisely because a transaction
+  // is never updated: the copy cannot drift from its invoice. It lets every
+  // ledger report filter by organization without joining Invoice.
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onUpdate: Restrict)
+
+  // Composite, like Invoice -> Client: a ledger row cannot point at another
+  // organization's invoice.
   invoiceId   String
-  invoice     Invoice         @relation(fields: [invoiceId], references: [id])
+  invoice     Invoice         @relation(fields: [invoiceId, organizationId], references: [id, organizationId], onUpdate: Restrict)
   type        TransactionType
   amountOre   Int // belopp i öre
   currency    String          @default("SEK")
   description String
   createdAt   DateTime        @default(now())
   // Inget updatedAt — transaktioner är oföränderliga
+
+  @@index([organizationId, createdAt]) // ledger reports per organization
 }
 
 enum TransactionType {
@@ -294,6 +355,9 @@ enum EmailType {
   PAYMENT_CONFIRMED
   INVITE
   PASSWORD_RESET
+  /// A seller added an EXISTING login as its customer. Not an invite: the
+  /// person already has a password, so there is nothing to set.
+  CUSTOMER_ADDED
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -388,6 +452,16 @@ model AuditLog {
   userId String?
   user   User?   @relation(fields: [userId], references: [id])
 
+  // Which organization the event belongs to. Nullable for the same reason as
+  // userId: a failed login for an unknown email, or a customer's own login,
+  // belongs to no single organization.
+  // Restrict, not the optional-relation defaults (SET NULL on delete, CASCADE
+  // on update): nothing done to an organization may ever rewrite an audit
+  // row (append-only, ADR 2). Every organization key is ON UPDATE RESTRICT
+  // for the same reason — an organization's id never changes.
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
   // Vilken e-post som FÖRSÖKTES, när ingen användare matchade.
   email String?
 
@@ -404,6 +478,7 @@ model AuditLog {
   @@index([userId, createdAt]) // "visa allt användare X gjort"
   @@index([action, createdAt]) // "visa alla misslyckade inloggningar senaste timmen"
   @@index([email, createdAt]) // "attackeras den här e-posten?"
+  @@index([organizationId, createdAt]) // an admin's audit view (phase 3)
 }
 
 // ─────────────────────────────────────────────────────────────

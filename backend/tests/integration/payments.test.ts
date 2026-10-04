@@ -10,6 +10,7 @@ import {
   buildTestApp,
   createTestUser,
   createTestOrganization,
+  clientUserId,
   loginAs,
   authed,
   clearRateLimits,
@@ -46,7 +47,7 @@ beforeAll(async () => {
     name: 'Betalande Kund AB'
   })
   clientId = created.json().client.id
-  userIds.push(created.json().client.userId)
+  userIds.push((await clientUserId(created.json().client.id)))
 })
 
 afterAll(async () => {
@@ -87,6 +88,9 @@ function paymentEvent(params: {
   amountOre: number
   eventId?: string
   paymentStatus?: string
+  /** What our checkout session records. Absent = a session from before
+   *  multi-tenancy, which is how most tests here send it. */
+  organizationId?: string
 }) {
   const eventId = params.eventId ?? `evt_test_${suffix}_${Math.random().toString(36).slice(2)}`
   eventIds.push(eventId)
@@ -101,7 +105,10 @@ function paymentEvent(params: {
         payment_status: params.paymentStatus ?? 'paid',
         amount_total: params.amountOre,
         currency: 'sek',
-        metadata: { invoiceId: params.invoiceId }
+        metadata: {
+          invoiceId: params.invoiceId,
+          ...(params.organizationId ? { organizationId: params.organizationId } : {})
+        }
       }
     }
   })
@@ -298,6 +305,50 @@ describe('applying a payment', () => {
     expect(res.json().handled).toBe(false)
     const stored = await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } })
     expect(stored.status).toBe('SENT')
+  })
+})
+
+describe('🏢 the webhook checks the organization before touching money', () => {
+  test('a session recording the invoice\'s own organization is applied', async () => {
+    const invoice = await makeInvoice()
+    const { body, signature } = paymentEvent({
+      invoiceId: invoice.id,
+      amountOre: invoice.totalDueOre,
+      organizationId
+    })
+
+    expect((await postWebhook(body, signature)).statusCode).toBe(200)
+    expect((await prisma.invoice.findUnique({ where: { id: invoice.id } }))?.status).toBe('PAID')
+  })
+
+  test('a session recording ANOTHER organization is never applied', async () => {
+    const other = await createTestOrganization('Annan Säljare AB')
+    try {
+      const invoice = await makeInvoice()
+      const { body, signature } = paymentEvent({
+        invoiceId: invoice.id,
+        amountOre: invoice.totalDueOre,
+        organizationId: other.id
+      })
+
+      // Acknowledged — retrying would not change the answer — but not paid.
+      expect((await postWebhook(body, signature)).statusCode).toBe(200)
+
+      const after = await prisma.invoice.findUnique({ where: { id: invoice.id } })
+      expect(after?.status).toBe('SENT')
+      expect(
+        await prisma.transaction.count({ where: { invoiceId: invoice.id, type: 'PAYMENT_RECEIVED' } })
+      ).toBe(0)
+
+      // Money arrived that we will not apply: loud, and filed under the
+      // invoice's organization, whose admin has to refund it.
+      const flagged = await prisma.auditLog.findFirst({
+        where: { action: 'PAYMENT_UNAPPLIED', resourceId: invoice.id }
+      })
+      expect(flagged?.organizationId).toBe(organizationId)
+    } finally {
+      await cleanupOrganizations([other.id])
+    }
   })
 })
 

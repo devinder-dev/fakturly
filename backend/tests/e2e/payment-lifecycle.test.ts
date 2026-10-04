@@ -12,6 +12,7 @@ import {
   buildTestApp,
   createTestUser,
   createTestOrganization,
+  clientUserId,
   loginAs,
   authed,
   clearRateLimits,
@@ -52,10 +53,10 @@ beforeAll(async () => {
     name: 'Livscykel AB'
   })
   clientId = created.json().client.id
-  userIds.push(created.json().client.userId)
+  userIds.push((await clientUserId(created.json().client.id)))
 
   await prisma.user.update({
-    where: { id: created.json().client.userId },
+    where: { id: (await clientUserId(created.json().client.id)) },
     data: { password: await testPasswordHash() }
   })
   clientToken = (await loginAs(app, CLIENT_EMAIL, '198.51.100.96')).accessToken

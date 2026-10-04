@@ -102,39 +102,63 @@ committed at `backend/certs/supabase-prod-ca-2021.crt`, SHA-256
 > 2026-09-23: Neon paused the project for the rest of the month. `/health`
 > touches nothing but the process, so Render stays awake and Neon still sleeps.
 
-### Deploying the organizations migration (multi-tenancy, ADR 56)
+### Deploying multi-tenancy (ADR 56)
 
-Migration `20261004091156_organizations` makes `User.organizationId` NOT NULL.
-**The release before it cannot create users against the new schema.** The
-container runs `prisma migrate deploy` on boot, before the new code serves,
-and Render keeps the old instance running until the new one is healthy. So
-expect the following:
+The release carries two migrations, applied on boot in order:
+`20261004091156_organizations` and `20261004135825_tenant_scoped_data`.
+**The previous release cannot write to the result.** The container runs
+`prisma migrate deploy` before the new code serves, and Render keeps the old
+instance running until the new one is healthy. Old code meets the new schema
+during a rolling deploy, after a failed boot (the new code fails after
+migrating, so the old instance keeps serving), and at the nightly demo reset.
 
-| Situation | What breaks |
-|---|---|
-| Rolling deploy | `POST /clients` returns 500 from the old instance until Render switches over |
-| The new release fails to boot after migrating | The same, for as long as the old instance keeps serving |
-| The nightly demo reset runs on the old code | It wipes everything, then fails to create the admin: the demo is **empty** |
+**Before deploying, take a backup.** It is the rollback. On Supabase, check
+that a recent backup exists under Database → Backups, or take one yourself:
 
-After any of these, once the new release is up, run `bun run seed:demo` from
-the Render shell if the demo was emptied.
-
-**Rolling back to the previous release.** Before switching the code back,
-make the column nullable again. Use the Supabase SQL editor, or `psql`
-against `DATABASE_URL`:
-
-```sql
-ALTER TABLE "User" ALTER COLUMN "organizationId" DROP NOT NULL;
+```bash
+pg_dump "$DATABASE_URL" --format=custom --file=before-multi-tenancy.dump
 ```
 
-The old release then boots normally (its `migrate deploy` reports "No pending
-migrations" and ignores the newer one) and can create users again. The
-`Organization` table and the foreign key stay; neither affects the old code.
+What the old release breaks while it still serves:
 
-**Rolling forward again.** The migration is already recorded as applied, so
-`migrate deploy` will **not** redo its last step. Restore it by hand *before*
-deploying the new release. Users created during the rollback have no
-organization yet, so give them one first:
+| Old code path | What happens |
+|---|---|
+| `POST /clients` | 500: the new customer record has no organization |
+| `POST /invoices`, credit notes | 500: the number series is keyed by organization, so the old `ON CONFLICT ("year")` matches no constraint |
+| Sending, reminders, the overdue job | 500: ledger rows need an organization |
+| Stripe webhook | 500. Stripe retries for days, so the payment is applied once the new release is up |
+| Nightly demo reset | Wipes everything, then fails to create the admin: the demo is **empty**. Run `bun run seed:demo` once the new release is up |
+
+**Rolling back** means restoring the backup and deploying the previous
+release. Anything written after the backup is lost. After the second
+migration, SQL alone is not enough: customer logins have left their
+organization, the number series changed its key, and four tables gained
+required columns.
+
+**If only the first migration applied.** Each migration runs in its own
+transaction, so if `tenant_scoped_data` fails, it leaves nothing behind and
+`organizations` stays applied (`bunx prisma migrate status` shows which). Two
+things then need doing, both rehearsed on a scratch database:
+
+1. **Clear the failed record first.** Prisma remembers the failure and
+   refuses *every* later `migrate deploy` with `P3009`, including the old
+   release's, which runs it on boot. A restarted old instance would not
+   come up at all:
+
+   ```bash
+   bunx prisma migrate resolve --rolled-back 20261004135825_tenant_scoped_data
+   ```
+
+2. **Make the one incompatible column nullable** (`User.organizationId`):
+
+   ```sql
+   ALTER TABLE "User" ALTER COLUMN "organizationId" DROP NOT NULL;
+   ```
+
+The old release then boots normally: its `migrate deploy` reports "No pending
+migrations" and does not object to the newer one.
+Before deploying the new release again, restore the constraint by hand. The
+migration is recorded as applied, so `migrate deploy` will not redo it:
 
 ```sql
 SELECT id, name FROM "Organization";   -- normally exactly one at this stage
@@ -142,7 +166,7 @@ UPDATE "User" SET "organizationId" = '<that id>' WHERE "organizationId" IS NULL;
 ALTER TABLE "User" ALTER COLUMN "organizationId" SET NOT NULL;
 ```
 
-This applies to the demo too. A reseed restores data, not constraints. And a
+This applies to the demo too: a reseed restores data, not constraints, and a
 reseed run from the *old* release creates users without an organization again.
 
 ## 3. Frontend — Vercel

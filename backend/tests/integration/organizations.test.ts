@@ -91,26 +91,48 @@ describe('createOrganization', () => {
 })
 
 describe('🏢 what the database itself guarantees', () => {
-  test('a user without an organization cannot be inserted, even bypassing Prisma', async () => {
-    // Prisma's types already refuse this at compile time. Raw SQL is how a
-    // future script or migration would slip past them; NOT NULL is the floor.
-    const error = await postgresError(() => prisma.$executeRaw`
-      INSERT INTO "User" ("id", "email", "password", "role", "updatedAt")
-      VALUES (${`orgless-${suffix}`}, ${`orgless-${suffix}@exempel.se`}, 'x', 'CLIENT', now())
-    `)
+  // Raw SQL in every test: Prisma's types already refuse most of these at
+  // compile time, and raw SQL is how a future script or migration would slip
+  // past them. These are the floor under everything else.
 
-    // 23502 = not_null_violation, and on organizationId specifically — every
-    // other NOT NULL column is supplied above.
-    expect(error.originalCode).toBe('23502')
-    expect(error.originalMessage).toContain('"organizationId"')
-
-    expect(await prisma.user.count({ where: { email: `orgless-${suffix}@exempel.se` } })).toBe(0)
-  })
-
-  test('an organization that still has users cannot be deleted', async () => {
+  test.each([
+    ['staff with no organization', 'ADMIN', null],
+    ['a customer login WITH an organization', 'CLIENT', 'org']
+  ])('%s cannot be inserted', async (_label, role, org) => {
     const organization = await createTestOrganization()
     organizationIds.push(organization.id)
-    await createTestUser(organization.id, `kvar-${suffix}@exempel.se`)
+    const email = `regel-${role}-${suffix}@exempel.se`
+
+    const error = await postgresError(() => prisma.$executeRaw`
+      INSERT INTO "User" ("id", "email", "password", "role", "organizationId", "updatedAt")
+      VALUES (${`regel-${role}-${suffix}`}, ${email}, 'x', ${role}::"Role",
+              ${org ? organization.id : null}, now())
+    `)
+
+    // 23514 = check_violation, on the rule that ties a login's organization
+    // to its role (ADR 56): staff belong to exactly one, customers to none.
+    expect(error.originalCode).toBe('23514')
+    expect(error.originalMessage).toContain('User_organization_matches_role')
+    expect(await prisma.user.count({ where: { email } })).toBe(0)
+  })
+
+  test('an organisationsnummer outside the stored form cannot be inserted', async () => {
+    const error = await postgresError(() => prisma.$executeRaw`
+      INSERT INTO "Organization" ("id", "name", "orgNumber", "address", "email", "updatedAt")
+      VALUES (${`format-${suffix}`}, 'Format AB', '5566778899', 'x', 'x@exempel.se', now())
+    `)
+
+    // Without the dash: the same company as 556677-8899 to a human, a
+    // different string to the unique index. The CHECK closes that door
+    // below the validator.
+    expect(error.originalCode).toBe('23514')
+    expect(error.originalMessage).toContain('Organization_orgNumber_format')
+  })
+
+  test('an organization that still has staff cannot be deleted', async () => {
+    const organization = await createTestOrganization()
+    organizationIds.push(organization.id)
+    await createTestUser(organization.id, `kvar-${suffix}@exempel.se`, 'ADMIN')
 
     // ON DELETE RESTRICT: removing a tenant must be a deliberate sequence,
     // never a side effect that orphans — or cascades through — its data.

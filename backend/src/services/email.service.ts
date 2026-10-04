@@ -103,6 +103,52 @@ export async function sendInviteEmail(params: {
   })
 }
 
+/**
+ * Tells an EXISTING login that another seller added them as a customer.
+ *
+ * Not an invite: the person already has a password, and a set-password link
+ * here would let whoever controls this seller's admin account trigger a
+ * password change on someone else's login. It only says what changed.
+ *
+ * loginUrl is null when the address is a staff login elsewhere: one login has
+ * one role, so it cannot open the customer portal. The email then says only
+ * that invoices from this seller will arrive at this address.
+ */
+export async function sendCustomerAddedEmail(params: {
+  to: string
+  clientName: string
+  organizationName: string
+  loginUrl: string | null
+  userId: string
+}): Promise<boolean> {
+  const where = params.loginUrl
+    ? [
+        'Du har redan ett konto i Fakturly, så du behöver inte göra något —',
+        `fakturor från ${params.organizationName} visas nu när du loggar in med`,
+        'ditt vanliga lösenord:',
+        params.loginUrl
+      ]
+    : [`Fakturor från ${params.organizationName} skickas till den här e-postadressen.`]
+
+  return sendAndLog({
+    to: params.to,
+    type: 'CUSTOMER_ADDED',
+    userId: params.userId,
+    subject: `${params.organizationName} har lagt till dig som kund i Fakturly`,
+    text: [
+      `Hej ${params.clientName},`,
+      '',
+      `${params.organizationName} har lagt till dig som kund.`,
+      ...where,
+      '',
+      'Om du inte känner igen avsändaren kan du ignorera det här mejlet.',
+      '',
+      'Vänliga hälsningar,',
+      'Fakturly'
+    ].join('\n')
+  })
+}
+
 /** Password reset, for a user who asked for one. */
 export async function sendPasswordResetEmail(params: {
   to: string

@@ -11,6 +11,11 @@ import { sendOverdueNoticeEmail, sendReminderEmail } from '../../services/email.
 import { QueueName, QUEUE_PREFIX, bullConnection, type EmailJobData } from '../queues.ts'
 
 export async function processEmailJob(job: Job<EmailJobData>) {
+  // DELIBERATELY CROSS-TENANT (ADR 56): one worker serves every organization,
+  // and the job carries only an invoice id — queued by a service that had
+  // already scoped it to the caller's organization. The `client` relation
+  // runs over the composite (clientId, organizationId) key, so the customer
+  // reached here is always the invoice's own organization's.
   const invoice = await prisma.invoice.findUnique({
     where: { id: job.data.invoiceId },
     select: {

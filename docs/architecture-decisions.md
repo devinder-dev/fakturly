@@ -1210,7 +1210,11 @@ cross-tenant test suite with a coverage guard (later).
   **Rolling forward again** needs the reverse by hand, because the migration
   is already recorded as applied and will not run twice: backfill the NULLs,
   then `SET NOT NULL`. The whole cycle was rehearsed on a scratch database,
-  and the steps are in `docs/deployment.md`.
+  and the steps are in `docs/deployment.md`. *(Phase 2: once its migration
+  has also run, which is the normal case since both ship in one release, SQL
+  alone no longer reverses it. Customer logins leave their organization and
+  the number series changes its key. The rollback is then the backup taken
+  just before the deploy; `docs/deployment.md` says so first.)*
 - **`org` claim in the access token, required.** An opaque id, not PII, so
   scoping costs no database lookup per request. A token without it fails
   verification. A pre-deploy session therefore gets one 401; the frontend's
@@ -1249,17 +1253,119 @@ cross-tenant test suite with a coverage guard (later).
 - **One user = one organization**, and `User.email` stays globally unique.
   An accountant serving two client companies needs two logins. Accepted to
   keep the token's single `org` claim honest; a membership table is the
-  upgrade path. **Known cost, open:** because a client's login email is
-  global, `POST /clients` answers 201 or 409 depending on whether the address
-  exists in *any* organization. That is a cross-tenant existence oracle.
-  Worse, one tenant can provision another tenant's customer first and block
-  them. The fix is separating a per-organization customer record from the
-  login identity. To be decided before tenants other than the demo share a
-  deployment.
+  upgrade path. *(Amended in phase 2 for customers — see below. The phase-1
+  version left `POST /clients` answering 201 or 409 depending on whether an
+  address existed in any organization: a cross-tenant oracle, and a way for
+  one tenant to block another's customer.)*
 
-**Not safe to deploy on its own:** after phase 1, reads are still unscoped:
-an admin of organization B lists organization A's clients. Phases 2–3 close
-that. No deploy between phases.
+**Phase 2 — tenant columns, scoped writes and single-row reads:**
+
+- `organizationId` on `Client`, `Invoice`, `Transaction` (denormalised: a
+  ledger row is never updated, so the copy cannot drift, and ledger reports
+  filter without a join) and `AuditLog` (nullable: an unknown email's failed
+  login belongs to no organization). Child-only tables (`InvoiceItem`,
+  `EmailLog`, the token tables) inherit it from their parent.
+- **Composite foreign keys** make a cross-tenant row impossible in SQL:
+  `Invoice(clientId, organizationId) → Client(id, organizationId)` and
+  `Transaction(invoiceId, organizationId) → Invoice(id, organizationId)`,
+  `ON UPDATE RESTRICT`. Prisma accepted them; no fallback was needed. The
+  credit-note self-reference stays a plain key: the service reads the
+  original scoped, so a credit note can only ever cite its own organization's
+  invoice. A composite key there is a candidate for later.
+- **Scoping is an explicit first parameter.** Every tenant repository
+  function takes `organizationId` first and puts it in every `WHERE`, and an
+  update or delete by id alone does not exist (`updateMany` with the
+  organization instead of `update`). A wrong organization finds nothing and
+  answers 404, byte-identical to an id that never existed. The deliberate
+  crossings are few and marked: `findInvoiceByIdUnscoped` (Stripe webhook),
+  the nightly overdue job and the email worker (`DELIBERATELY CROSS-TENANT`).
+  `grep -rn "Unscoped\|CROSS-TENANT" src` lists them all. Rejected: a Prisma
+  extension that injects the filter, since it misses `$queryRaw`
+  (`allocateInvoiceNumber`, the dashboard); per-tenant Postgres RLS is the
+  next layer down and stays future hardening.
+- **One invoice number series per organization and year**
+  (`InvoiceNumberSeries @@id([organizationId, year])`,
+  `Invoice @@unique([organizationId, invoiceNumber])`), since bokföringslagen
+  speaks of a business's own series. The migration gives every organization
+  that already issued numbers in a year a counter continuing from the shared
+  one, never below it, so no number can be issued twice. One consequence:
+  an OCR reference is now unique only per organization, so the BGMax import
+  (wave 2) must resolve the organization from the deposit's receiving
+  bankgiro.
+- `AuditInput.organizationId` is a **required** key whose value may be null.
+  The compiler then found all ~25 `record()` call sites, and each one had to
+  decide. Optional would have let a call site forget, filing an event under
+  no organization forever.
+- **A customer buys from many sellers: one login, one customer record per
+  seller** (owner's decision, 2026-10-04). Staff keep exactly one
+  organization. A customer *login* belongs to none (`User.organizationId`
+  NULL, enforced by `CHECK (("role" = 'ADMIN') = ("organizationId" IS NOT
+  NULL))`) and reaches each seller through a `Client` row, unique per
+  organization on email and on login. This amends phase 1: the `org` claim
+  is required on ADMIN tokens and **refused** on CLIENT tokens, and the
+  caller type is a union in which only an admin has an organization, so
+  `toActor()` cannot be called for a customer. Customer reads are scoped by
+  the login's own client ids, across all its sellers. Every invoice carries
+  `seller { id, name }` so the portal can group by it. `GET /clients/me`
+  returns a list.
+- **`POST /clients` answers identically whatever the address already is.**
+  New address: a login plus an invite. A customer of another seller: a
+  record here plus a `CUSTOMER_ADDED` email (never a second invite, which
+  would let this tenant trigger a password change on a login it does not
+  own). A staff login elsewhere: a record here and no portal email, since
+  that login cannot use the customer portal. This is a known limitation.
+  The response stopped carrying the login's id: a cuid begins with its
+  creation time, and an "older than now" id would have said "already
+  existed". Provisioning uses `INSERT … ON CONFLICT DO NOTHING`
+  (`createMany` with `skipDuplicates`), so two sellers adding the same new
+  address at once cannot fail each other.
+- **Stripe** stays one platform account. The checkout session records the
+  organization, and the webhook refuses (and audits as `PAYMENT_UNAPPLIED`)
+  a session whose organization differs from the invoice's. A session
+  without one predates this change and is accepted.
+- The phase-1 placeholder's organisationsnummer is corrected, and the
+  stored format is enforced with `CHECK ("orgNumber" ~ '^[0-9]{6}-[0-9]{4}$')`.
+  **The demo bankgiro `123-4567` stays invalid on purpose** (owner's
+  decision): a wrong check digit means every bank refuses a payment to it, so
+  a visitor reading the public demo PDFs can never pay a stranger.
+- Verified on the demo data: every row count unchanged; 0 invoice/client and
+  0 ledger/invoice organization mismatches; `prisma migrate diff` from the
+  migrated database to the schema is empty. On a scratch database with two
+  organizations sharing one 2026 counter: both continue from it, a year with
+  only deleted drafts stays with the oldest organization, and audit rows land
+  where they belong. The isolation suite was shown to fail when the scoping
+  of `findInvoiceById` or `updateClient` was removed.
+- The backfill `UPDATE`s in this migration are the only updates ever run on
+  `Transaction` and `AuditLog`. They fill in a column that did not exist; no
+  recorded fact changes.
+- **Found by this phase's security review, and fixed:**
+  - *The audit trail leaked what the 201 hid.* `INVITE_SENT` was filed under
+    the admin's organization only for a brand-new address, so the admin's
+    audit view (scoped in phase 3) would have shown "new" versus "already a
+    Fakturly user". The invite concerns the login, which belongs to no
+    organization, so it is now filed under none. A test asserts the
+    organization-visible trail is identical across the cases, and it failed
+    against the old filing.
+  - *Timing.* The staff branch sent no email and answered 100–300 ms faster.
+    Now every branch sends exactly one email; a staff address gets the
+    customer-added email without a portal link. What remains is the invite's
+    token write (milliseconds against an email's hundreds). Moving all three
+    sends onto the BullMQ queue would close it completely, at the cost of
+    asynchronous invites. Recorded, not done.
+  - *Cascades into append-only rows.* Every foreign key to `Organization` is
+    now `ON UPDATE RESTRICT`, not Prisma's default `CASCADE`. An
+    organization's id never changes, and if it ever did, it must not
+    silently rewrite ledger or audit rows.
+- **Known, older than this branch, left open:** the nightly demo wipe
+  deletes every organization's data (a real tenant must never live on a
+  `DEMO_MODE` deployment; a guard is planned with the two-organization demo
+  in phase 6). Customers can see their DRAFT invoices; that was true before
+  multi-tenancy, and whether to hide them is the owner's call.
+
+**Not safe to deploy on its own:** after phase 2, aggregates are still
+unscoped: the dashboard, the aging, VAT and SIE reports, and the audit-log
+view read every organization's rows. Phase 3 closes that. No deploy between
+phases.
 
 **Checklist for every future tenant table** (each one, every time):
 `organizationId` NOT NULL · composite foreign key to its tenant parent ·

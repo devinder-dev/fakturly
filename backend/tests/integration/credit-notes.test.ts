@@ -6,6 +6,7 @@ import {
   buildTestApp,
   createTestUser,
   createTestOrganization,
+  clientUserId,
   loginAs,
   authed,
   clearRateLimits,
@@ -46,9 +47,9 @@ beforeAll(async () => {
 
   const created = await asAdmin()('POST', '/clients', { email: CLIENT_EMAIL, name: 'Kredit AB' })
   clientId = created.json().client.id
-  userIds.push(created.json().client.userId)
+  userIds.push((await clientUserId(created.json().client.id)))
   await prisma.user.update({
-    where: { id: created.json().client.userId },
+    where: { id: (await clientUserId(created.json().client.id)) },
     data: { password: await testPasswordHash() }
   })
   clientToken = (await loginAs(app, CLIENT_EMAIL, '198.51.100.151')).accessToken
@@ -149,7 +150,7 @@ describe('POST /invoices/:id/credit-note', () => {
 
   test('a PAID invoice cannot be credited — that would be a refund', async () => {
     const original = await issue()
-    await invoiceRepository.markPaid(original.id, { stripePaymentId: `pi_cn_${suffix}`, amountOre: original.grossTotalOre })
+    await invoiceRepository.markPaid(organizationId, original.id, { stripePaymentId: `pi_cn_${suffix}`, amountOre: original.grossTotalOre })
 
     const res = await asAdmin()('POST', `/invoices/${original.id}/credit-note`)
     expect(res.statusCode).toBe(422)

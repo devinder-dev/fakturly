@@ -44,6 +44,7 @@ export async function createOrganization(
     action: AuditAction.ORGANIZATION_CREATED,
     resource: AuditResource.ORGANIZATION,
     userId: null,
+    organizationId: organization.id,
     resourceId: organization.id
   })
 

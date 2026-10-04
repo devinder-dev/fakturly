@@ -10,6 +10,7 @@ import {
   buildTestApp,
   createTestUser,
   createTestOrganization,
+  withUserId,
   loginAs,
   authed,
   clearRateLimits,
@@ -86,7 +87,7 @@ describe('2. the admin takes on a customer', () => {
     })
 
     expect(res.statusCode).toBe(201)
-    client = res.json().client
+    client = await withUserId(res.json().client)
     userIds.push(client.userId)
 
     const user = await prisma.user.findUnique({ where: { id: client.userId } })
@@ -101,7 +102,7 @@ describe('2. the admin takes on a customer', () => {
       email: OTHER_EMAIL,
       name: 'Annan Kund AB'
     })
-    otherClient = res.json().client
+    otherClient = await withUserId(res.json().client)
     userIds.push(otherClient.userId)
 
     expect(JSON.stringify(res.json()).toLowerCase()).not.toContain('password')
@@ -181,7 +182,7 @@ describe('4. the customer signs in and sees their invoice', () => {
     const res = await authed(app, clientToken)('GET', '/clients/me')
 
     expect(res.statusCode).toBe(200)
-    expect(res.json().client.name).toBe('Nordic Design AB')
+    expect(res.json().clients.map((c: { name: string }) => c.name)).toEqual(['Nordic Design AB'])
   })
 
   test('their invoice list contains only their own', async () => {

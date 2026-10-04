@@ -155,7 +155,11 @@ export async function me(request: FastifyRequest, reply: FastifyReply) {
       id: user.id,
       email: user.email,
       role: user.role,
-      organization: { id: user.organization.id, name: user.organization.name }
+      // Staff: their organization. A customer login has none (ADR 56) — the
+      // sellers it buys from are at GET /clients/me.
+      organization: user.organization
+        ? { id: user.organization.id, name: user.organization.name }
+        : null
     }
   })
 }

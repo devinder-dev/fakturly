@@ -71,8 +71,10 @@ beforeAll(async () => {
     })
     instance.get('/_t/prisma', async () => {
       const email = `dubblett-${suffix}@test.se`
-      await prisma.user.create({ data: { email, password: 'x', organizationId } })
-      await prisma.user.create({ data: { email, password: 'x', organizationId } }) // P2002
+      // ADMIN: staff carry an organization (a customer login may not — the
+      // database's CHECK would refuse the row before the unique index did).
+      await prisma.user.create({ data: { email, password: 'x', role: 'ADMIN', organizationId } })
+      await prisma.user.create({ data: { email, password: 'x', role: 'ADMIN', organizationId } }) // P2002
     })
   })
 })

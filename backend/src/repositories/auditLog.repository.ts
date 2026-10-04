@@ -10,6 +10,8 @@ import { prisma } from '../lib/prisma.ts'
 export type AuditEntry = {
   /** Null when the acting user is unknown — e.g. a login for an email that does not exist. */
   userId?: string | null | undefined
+  /** The organization the event belongs to; null for one that belongs to none. */
+  organizationId?: string | null | undefined
   /** What was attempted, when no user matched. This is how credential stuffing becomes visible. */
   email?: string | null | undefined
   action: string
@@ -36,6 +38,7 @@ export async function createAuditEntry(entry: AuditEntry): Promise<void> {
   await prisma.auditLog.create({
     data: {
       userId: entry.userId ?? null,
+      organizationId: entry.organizationId ?? null,
       email: entry.email ?? null,
       action: entry.action,
       resource: entry.resource,

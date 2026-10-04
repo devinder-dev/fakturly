@@ -53,6 +53,9 @@ export type CheckoutSession = {
 
 export type CreateCheckoutParams = {
   invoiceId: string
+  /** The seller. Echoed back in the webhook so the payment can be checked
+   *  against the invoice's organization before anything is written. */
+  organizationId: string
   invoiceNumber: string
   /** Total in öre, VAT included — what the client actually pays. */
   amountOre: number
@@ -99,6 +102,7 @@ export async function createCheckoutSession(
     // Read back by the webhook. This is the link between their world and ours.
     metadata: {
       invoiceId: params.invoiceId,
+      organizationId: params.organizationId,
       invoiceNumber: params.invoiceNumber
     },
     success_url: params.successUrl,

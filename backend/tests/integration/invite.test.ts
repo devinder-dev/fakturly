@@ -6,6 +6,7 @@ import {
   buildTestApp,
   createTestUser,
   createTestOrganization,
+  clientUserId,
   loginAs,
   authed,
   clearRateLimits,
@@ -64,7 +65,7 @@ describe('provisioning issues an invite', () => {
     })
 
     expect(res.statusCode).toBe(201)
-    inviteeUserId = res.json().client.userId
+    inviteeUserId = (await clientUserId(res.json().client.id))
     userIds.push(inviteeUserId)
 
     const tokens = await prisma.passwordToken.findMany({ where: { userId: inviteeUserId } })

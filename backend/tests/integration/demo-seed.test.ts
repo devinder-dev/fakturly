@@ -36,12 +36,19 @@ describe.skipIf(!allowed)('resetDemoData', () => {
     }
   })
 
-  test('🏢 everyone belongs to the one demo organization', async () => {
+  test('🏢 everything belongs to the one demo organization, the way each role belongs', async () => {
     const organizations = await prisma.organization.findMany({ select: { id: true } })
     expect(organizations).toHaveLength(summary.organizations)
+    const demo = organizations[0]!.id
 
-    const users = await prisma.user.groupBy({ by: ['organizationId'], _count: true })
-    expect(users).toEqual([{ organizationId: organizations[0]!.id, _count: summary.users }])
+    // Staff: in the organization. Customer logins: in none (ADR 56) — they
+    // reach it through a customer record, and every record is the demo's.
+    const users = await prisma.user.findMany({ select: { role: true, organizationId: true } })
+    expect(users.filter((u) => u.role === 'ADMIN').every((u) => u.organizationId === demo)).toBe(true)
+    expect(users.filter((u) => u.role === 'CLIENT').every((u) => u.organizationId === null)).toBe(true)
+
+    expect(await prisma.client.count({ where: { organizationId: demo } })).toBe(summary.clients)
+    expect(await prisma.invoice.count({ where: { organizationId: { not: demo } } })).toBe(0)
   })
 
   test('the numbers form an unbroken series starting at 0001', async () => {

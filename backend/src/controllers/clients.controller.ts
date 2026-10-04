@@ -61,11 +61,13 @@ export async function createClient(request: FastifyRequest, reply: FastifyReply)
     requestContext(request)
   )
 
-  // 201 Created, and deliberately no temporary password in the response.
+  // 201 Created, and deliberately no temporary password in the response —
+  // nor the login's id. Whether the address already had a login (as another
+  // seller's customer) must not be readable from this response, and a cuid
+  // begins with its creation time: an "old" id would say exactly that.
   return reply.code(201).send({
     client: {
       id: created.clientId,
-      userId: created.userId,
       email: created.email,
       name: created.name
     }
@@ -75,7 +77,9 @@ export async function createClient(request: FastifyRequest, reply: FastifyReply)
 export async function listClients(request: FastifyRequest, reply: FastifyReply) {
   const { limit, offset } = listQuerySchema.parse(request.query)
 
-  const { clients, total } = await clientService.listClients(limit, offset)
+  const admin = requireCaller(request)
+
+  const { clients, total } = await clientService.listClients(toActor(admin), limit, offset)
 
   return reply.code(200).send({
     clients: clients.map(toPublicClient),
@@ -104,13 +108,21 @@ export async function getClient(request: FastifyRequest, reply: FastifyReply) {
  *
  * Takes no id at all, which is the point: an endpoint with no id cannot have
  * an IDOR bug. The client portal should use this rather than looking up its
- * own id and passing it back.
+ * own ids and passing them back.
+ *
+ * A list: one record per seller the caller buys from (ADR 56), each naming
+ * its seller so the portal can group invoices by it.
  */
-export async function getOwnClient(request: FastifyRequest, reply: FastifyReply) {
+export async function getOwnClients(request: FastifyRequest, reply: FastifyReply) {
   const caller = requireCaller(request)
-  const client = await clientService.getOwnClient(caller)
+  const clients = await clientService.getOwnClients(caller)
 
-  return reply.code(200).send({ client: toPublicClient(client) })
+  return reply.code(200).send({
+    clients: clients.map((client) => ({
+      ...toPublicClient(client),
+      seller: { id: client.organization.id, name: client.organization.name }
+    }))
+  })
 }
 
 export async function updateClient(request: FastifyRequest, reply: FastifyReply) {
@@ -121,7 +133,7 @@ export async function updateClient(request: FastifyRequest, reply: FastifyReply)
   const updated = await clientService.updateClient(
     id,
     fields,
-    admin.id,
+    toActor(admin),
     requestContext(request)
   )
 

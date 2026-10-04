@@ -6,6 +6,7 @@ import {
   buildTestApp,
   createTestUser,
   createTestOrganization,
+  withUserId,
   loginAs,
   authed,
   clearRateLimits,
@@ -40,15 +41,15 @@ beforeAll(async () => {
   userIds.push((await createTestUser(organizationId, ADMIN_EMAIL, 'ADMIN')).id)
   adminToken = (await loginAs(app, ADMIN_EMAIL, '198.51.100.130')).accessToken
 
-  alice = (await asAdmin()('POST', '/clients', {
+  alice = await withUserId((await asAdmin()('POST', '/clients', {
     email: `pdf-alice-${suffix}@kund.se`,
     name: 'Alice Design AB',
     address: 'Storgatan 1, 111 22 Stockholm'
-  })).json().client
-  bob = (await asAdmin()('POST', '/clients', {
+  })).json().client)
+  bob = await withUserId((await asAdmin()('POST', '/clients', {
     email: `pdf-bob-${suffix}@kund.se`,
     name: 'Bob Bygg AB'
-  })).json().client
+  })).json().client)
   userIds.push(alice.userId, bob.userId)
 
   await prisma.user.updateMany({
@@ -125,7 +126,7 @@ describe('the document itself', () => {
    * renderer writes uncompressed, and on structural facts.
    */
   test('carries the invoice number in its metadata', async () => {
-    const invoice = await invoiceRepository.findInvoiceById(aliceInvoiceId)
+    const invoice = await invoiceRepository.findInvoiceById(organizationId, aliceInvoiceId)
     const pdf = await renderInvoicePdf(invoice!)
 
     expect(pdf.filename).toBe(`faktura-${invoice!.invoiceNumber}.pdf`)
@@ -140,7 +141,7 @@ describe('the document itself', () => {
     })
     const id = created.json().invoice.id
     await asAdmin()('POST', `/invoices/${id}/send`)
-    await invoiceRepository.markPaid(id, { stripePaymentId: `pi_pdf_${suffix}`, amountOre: 12_500 })
+    await invoiceRepository.markPaid(organizationId, id, { stripePaymentId: `pi_pdf_${suffix}`, amountOre: 12_500 })
 
     const res = await asAdmin()('GET', `/invoices/${id}/pdf`)
     expect(res.statusCode).toBe(200)

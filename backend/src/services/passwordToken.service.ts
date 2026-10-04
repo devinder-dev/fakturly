@@ -134,6 +134,8 @@ export async function redeemPasswordToken(
       stored.type === 'INVITE' ? AuditAction.PASSWORD_SET : AuditAction.PASSWORD_RESET,
     resource: AuditResource.USER,
     userId: stored.userId,
+    // The staff member's organization; null for a customer login.
+    organizationId: await userRepository.findOrganizationIdOfUser(stored.userId),
     resourceId: stored.userId,
     ipAddress: context.ip,
     userAgent: context.userAgent

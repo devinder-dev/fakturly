@@ -6,6 +6,7 @@ import {
   buildTestApp,
   createTestUser,
   createTestOrganization,
+  withUserId,
   loginAs,
   authed,
   clearRateLimits,
@@ -48,8 +49,8 @@ beforeAll(async () => {
     name: 'Bob AB'
   })
 
-  alice = a.json().client
-  bob = b.json().client
+  alice = await withUserId(a.json().client)
+  bob = await withUserId(b.json().client)
   userIds.push(alice.userId, bob.userId)
 
   // Provisioned clients have an unknown random password, so give them a
@@ -71,18 +72,22 @@ afterAll(async () => {
 })
 
 describe('🏢 provisioning puts the client in the admin\'s organization', () => {
-  test('the new client user belongs to the admin\'s organization', async () => {
+  test('the customer record belongs to the admin\'s organization; the login to none', async () => {
     const res = await authed(app, adminToken)('POST', '/clients', {
       email: `org-${suffix}@kund.se`,
       name: 'Org Kund AB'
     })
     expect(res.statusCode).toBe(201)
 
-    const user = await prisma.user.findUniqueOrThrow({
-      where: { id: res.json().client.userId },
-      select: { organizationId: true }
+    const record = await prisma.client.findUniqueOrThrow({
+      where: { id: res.json().client.id },
+      select: { organizationId: true, user: { select: { organizationId: true, role: true } } }
     })
-    expect(user.organizationId).toBe(organizationId)
+    expect(record.organizationId).toBe(organizationId)
+    // A customer login is nobody's staff: it reaches each seller through a
+    // record like this one (ADR 56).
+    expect(record.user.role).toBe('CLIENT')
+    expect(record.user.organizationId).toBeNull()
   })
 
   test('an organizationId in the body is ignored — the tenant comes from the token', async () => {
@@ -95,17 +100,28 @@ describe('🏢 provisioning puts the client in the admin\'s organization', () =>
       })
       expect(res.statusCode).toBe(201)
 
-      const user = await prisma.user.findUniqueOrThrow({
-        where: { id: res.json().client.userId },
+      const record = await prisma.client.findUniqueOrThrow({
+        where: { id: res.json().client.id },
         select: { organizationId: true }
       })
       // Zod strips the unknown key; the service never had a way to receive
       // one. Planting a client in another company is not blocked by a check
       // — there is no path for it.
-      expect(user.organizationId).toBe(organizationId)
+      expect(record.organizationId).toBe(organizationId)
+      expect(await prisma.client.count({ where: { organizationId: other.id } })).toBe(0)
     } finally {
       await cleanupOrganizations([other.id])
     }
+  })
+
+  test('🔒 the response does not include the login\'s id', async () => {
+    const res = await authed(app, adminToken)('POST', '/clients', {
+      email: `noid-${suffix}@kund.se`,
+      name: 'Utan Id AB'
+    })
+    // A cuid begins with its creation time. An "old" login id would tell
+    // this admin that the address was already another seller\'s customer.
+    expect(Object.keys(res.json().client).sort()).toEqual(['email', 'id', 'name'])
   })
 })
 
@@ -231,17 +247,19 @@ describe('🎯 IDOR — one client reading another', () => {
 })
 
 describe('GET /clients/me — no id means no IDOR is possible', () => {
-  test('each client gets their own record', async () => {
+  test('each client gets their own records — one per seller', async () => {
     const aliceRes = await authed(app, aliceToken)('GET', '/clients/me')
     const bobRes = await authed(app, bobToken)('GET', '/clients/me')
 
-    expect(aliceRes.json().client.name).toBe('Alice AB')
-    expect(bobRes.json().client.name).toBe('Bob AB')
+    expect(aliceRes.json().clients.map((c: { name: string }) => c.name)).toEqual(['Alice AB'])
+    expect(bobRes.json().clients.map((c: { name: string }) => c.name)).toEqual(['Bob AB'])
+    // Each record names its seller, which is what the portal groups by.
+    expect(aliceRes.json().clients[0].seller).toEqual({ id: organizationId, name: 'Testbolaget AB' })
   })
 
   test('"me" is not parsed as an id', async () => {
     const res = await authed(app, aliceToken)('GET', '/clients/me')
-    expect(res.json().client.id).toBe(alice.id)
+    expect(res.json().clients[0].id).toBe(alice.id)
   })
 
   test('an admin has no client profile', async () => {

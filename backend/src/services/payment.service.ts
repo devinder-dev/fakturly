@@ -18,6 +18,7 @@ import { env } from '../lib/env.ts'
 import { totalDueOre } from '../lib/money.ts'
 import { NotFoundError, BusinessRuleError } from '../lib/errors.ts'
 import type { RequestContext } from './auth.service.ts'
+import type { Actor } from '../types/auth.ts'
 
 // ─────────────────────────────────────────────────────────────
 // Creating a payment link
@@ -38,10 +39,10 @@ export type PaymentLink = {
  */
 export async function createPaymentLink(
   invoiceId: string,
-  actingAdminId: string,
+  actor: Actor,
   context: RequestContext = {}
 ): Promise<PaymentLink> {
-  const invoice = await invoiceRepository.findInvoiceById(invoiceId)
+  const invoice = await invoiceRepository.findInvoiceById(actor.organizationId, invoiceId)
   if (!invoice) {
     throw new NotFoundError('Fakturan')
   }
@@ -62,7 +63,7 @@ export async function createPaymentLink(
     throw new BusinessRuleError('Fakturan är krediterad och kan inte betalas')
   }
 
-  const client = await clientRepository.findClientById(invoice.clientId)
+  const client = await clientRepository.findClientById(actor.organizationId, invoice.clientId)
   if (!client) {
     throw new NotFoundError('Kunden')
   }
@@ -73,6 +74,7 @@ export async function createPaymentLink(
 
   const session = await createCheckoutSession({
     invoiceId: invoice.id,
+    organizationId: invoice.organizationId,
     invoiceNumber: invoice.invoiceNumber,
     amountOre,
     currency: invoice.currency,
@@ -88,12 +90,13 @@ export async function createPaymentLink(
     await expireCheckoutSession(invoice.stripePaymentId)
   }
 
-  await invoiceRepository.attachCheckoutSession(invoice.id, session.id)
+  await invoiceRepository.attachCheckoutSession(actor.organizationId, invoice.id, session.id)
 
   await record({
     action: AuditAction.PAYMENT_LINK_CREATED,
     resource: AuditResource.INVOICE,
-    userId: actingAdminId,
+    userId: actor.userId,
+    organizationId: actor.organizationId,
     resourceId: invoice.id,
     ipAddress: context.ip,
     userAgent: context.userAgent
@@ -155,10 +158,34 @@ export async function handleStripeEvent(event: StripeEvent): Promise<WebhookOutc
     return { handled: false, reason: `payment_status:${session.payment_status}` }
   }
 
-  const invoice = await invoiceRepository.findInvoiceById(invoiceId)
+  // DELIBERATELY CROSS-TENANT (ADR 56). Stripe is one platform account for
+  // every organization and tells us an invoice id, nothing more — so the
+  // organization is learned from the row. Everything after this line is
+  // scoped to that organization.
+  const invoice = await invoiceRepository.findInvoiceByIdUnscoped(invoiceId)
   if (!invoice) {
     console.error('[payment] webhook references an unknown invoice', { invoiceId })
     return { handled: false, reason: 'unknown_invoice' }
+  }
+
+  // The session also records the organization it was created for. A
+  // mismatch means the invoice id in the metadata does not belong to the
+  // seller whose payment page took the money — never apply that. A session
+  // created before multi-tenancy has no organizationId; it can only be for
+  // the single organization that existed then, so it is accepted.
+  const sessionOrganizationId = session.metadata?.organizationId
+  if (sessionOrganizationId !== undefined && sessionOrganizationId !== invoice.organizationId) {
+    console.error('[payment] checkout session organization does not match the invoice — refund needed', {
+      invoiceId,
+      sessionId: session.id
+    })
+    await record({
+      action: AuditAction.PAYMENT_UNAPPLIED,
+      resource: AuditResource.INVOICE,
+      organizationId: invoice.organizationId,
+      resourceId: invoiceId
+    })
+    return { handled: false, reason: 'organization_mismatch' }
   }
 
   const expectedOre = totalDueOre(invoice)
@@ -180,7 +207,7 @@ export async function handleStripeEvent(event: StripeEvent): Promise<WebhookOutc
   // then mark paid where the status still allows it. A repeat delivery fails
   // the claim; a failure after the claim rolls it back so the retry works.
   const outcome = await webhookEventRepository.claimEventAndRun(event.id, event.type, (tx) =>
-    invoiceRepository.markPaidWithin(tx, invoiceId, {
+    invoiceRepository.markPaidWithin(tx, invoice.organizationId, invoiceId, {
       stripePaymentId: session.payment_intent ?? session.id,
       amountOre
     })
@@ -207,6 +234,7 @@ export async function handleStripeEvent(event: StripeEvent): Promise<WebhookOutc
     await record({
       action: AuditAction.PAYMENT_UNAPPLIED,
       resource: AuditResource.INVOICE,
+      organizationId: invoice.organizationId,
       resourceId: invoiceId
     })
     return { handled: false, reason: 'invoice_not_payable' }
@@ -217,10 +245,11 @@ export async function handleStripeEvent(event: StripeEvent): Promise<WebhookOutc
     resource: AuditResource.INVOICE,
     // No acting user: this was Stripe, not a person. userId stays null, which
     // the audit schema allows precisely for events with no human actor.
+    organizationId: invoice.organizationId,
     resourceId: invoiceId
   })
 
-  const client = await clientRepository.findClientById(paid.clientId)
+  const client = await clientRepository.findClientById(invoice.organizationId, paid.clientId)
   if (client) {
     await sendPaymentConfirmationEmail({
       to: client.email,

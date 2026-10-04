@@ -9,6 +9,7 @@ import {
   buildTestApp,
   createTestUser,
   createTestOrganization,
+  clientUserId,
   loginAs,
   authed,
   clearRateLimits,
@@ -46,7 +47,7 @@ beforeAll(async () => {
     name: 'Sen Betalare AB'
   })
   clientId = created.json().client.id
-  userIds.push(created.json().client.userId)
+  userIds.push((await clientUserId(created.json().client.id)))
 })
 
 afterAll(async () => {

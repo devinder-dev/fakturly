@@ -6,6 +6,7 @@ import {
   buildTestApp,
   createTestUser,
   createTestOrganization,
+  withUserId,
   loginAs,
   authed,
   clearRateLimits,
@@ -59,8 +60,8 @@ beforeAll(async () => {
     email: `inv-bob-${suffix}@kund.se`,
     name: 'Bob AB'
   })
-  alice = a.json().client
-  bob = b.json().client
+  alice = await withUserId(a.json().client)
+  bob = await withUserId(b.json().client)
   userIds.push(alice.userId, bob.userId)
 
   await prisma.user.updateMany({

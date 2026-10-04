@@ -34,7 +34,7 @@ export default async function clientRoutes(app: FastifyInstance) {
   )
 
   /**
-   * GET /clients/me — the caller's own record.
+   * GET /clients/me — the caller's own records, one per seller.
    *
    * Declared BEFORE /clients/:id. Fastify's router is not order-dependent for
    * static versus parametric segments — a static segment always wins — but
@@ -47,7 +47,7 @@ export default async function clientRoutes(app: FastifyInstance) {
   app.get(
     '/clients/me',
     { onRequest: [authenticate] },
-    clientsController.getOwnClient
+    clientsController.getOwnClients
   )
 
   /**
