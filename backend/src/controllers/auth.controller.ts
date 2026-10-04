@@ -132,8 +132,8 @@ export async function refresh(request: FastifyRequest, reply: FastifyReply) {
  * Returns the currently authenticated user.
  *
  * Note that this reads from the DATABASE rather than just echoing the token's
- * claims back. The token carries only an id and a role — no email, because a
- * JWT is base64 and readable by anyone holding it.
+ * claims back. The token carries only ids and a role — no email and no
+ * company name, because a JWT is base64 and readable by anyone holding it.
  *
  * Reading fresh also means a role changed five minutes ago is reflected now,
  * instead of being stale until the token expires.
@@ -151,7 +151,12 @@ export async function me(request: FastifyRequest, reply: FastifyReply) {
   if (!user) throw new UnauthenticatedError()
 
   return reply.code(200).send({
-    user: { id: user.id, email: user.email, role: user.role }
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      organization: { id: user.organization.id, name: user.organization.name }
+    }
   })
 }
 

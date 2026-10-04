@@ -108,7 +108,12 @@ const components = {
       properties: {
         id: { type: 'string' },
         email: { type: 'string' },
-        role: { type: 'string', enum: ['ADMIN', 'CLIENT'] }
+        role: { type: 'string', enum: ['ADMIN', 'CLIENT'] },
+        organization: {
+          type: 'object',
+          description: 'The tenant the user belongs to. Its id is also the `org` claim of the access token.',
+          properties: { id: { type: 'string' }, name: { type: 'string' } }
+        }
       }
     },
     Client: {

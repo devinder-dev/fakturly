@@ -5,8 +5,10 @@ import type { FastifyInstance } from 'fastify'
 import {
   buildTestApp,
   createTestUser,
+  createTestOrganization,
   clearRateLimits,
   cleanupUsers,
+  cleanupOrganizations,
   cleanupAuditByEmail,
   uniqueSuffix,
   TEST_PASSWORD,
@@ -15,18 +17,21 @@ import {
 } from '../helpers.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 const EMAIL = `auth-${suffix}@exempel.se`
 let userId: string
 
 beforeAll(async () => {
   app = await buildTestApp()
-  const user = await createTestUser(EMAIL, 'ADMIN')
+  organizationId = (await createTestOrganization()).id
+  const user = await createTestUser(organizationId, EMAIL, 'ADMIN')
   userId = user.id
 })
 
 afterAll(async () => {
   await cleanupUsers([userId])
+  await cleanupOrganizations([organizationId])
   await cleanupAuditByEmail(suffix)
   await clearRateLimits()
 })
@@ -94,6 +99,17 @@ describe('POST /auth/login', () => {
     expect(claims).toHaveProperty('aud')
     // A JWT is base64, not encryption. Anyone holding it reads every claim.
     expect(JSON.stringify(claims)).not.toContain('@')
+  })
+
+  test('🏢 the token carries the user\'s organization, and the body names it', async () => {
+    const res = await login()
+    const claims = decodeJwt(res.json().accessToken)
+
+    // The id is what every scoped query will filter on; the name is only for
+    // display, so it stays out of the token.
+    expect(claims.org).toBe(organizationId)
+    expect(res.json().user.organization).toEqual({ id: organizationId, name: 'Testbolaget AB' })
+    expect(JSON.stringify(claims)).not.toContain('Testbolaget')
   })
 
   test('expires in 15 minutes', async () => {
@@ -190,6 +206,34 @@ describe('POST /auth/refresh — rotation', () => {
     const rows = await prisma.refreshToken.findMany({ where: { userId } })
     expect(rows.some((r) => r.tokenHash === raw)).toBe(false)
     expect(/^[a-f0-9]{64}$/.test(rows[0]!.tokenHash)).toBe(true)
+  })
+
+  test('🏢 the new token\'s organization is read from the database, not copied forward', async () => {
+    // Moving a user between organizations is not a feature — one user, one
+    // org. It is the cleanest way to prove where the claim comes from: if
+    // refresh copied it from the old token, the new one would still say
+    // the old organization.
+    const other = await createTestOrganization('Annat Bolag AB')
+    const first = await login(EMAIL, TEST_PASSWORD, '203.0.113.53')
+    expect(decodeJwt(first.json().accessToken).org).toBe(organizationId)
+
+    await prisma.user.update({ where: { id: userId }, data: { organizationId: other.id } })
+    try {
+      await clearRateLimits()
+      const refreshed = await app.inject({
+        method: 'POST',
+        url: '/auth/refresh',
+        headers: { cookie: `fakturly_refresh=${refreshCookieOf(first)!.value}` },
+        remoteAddress: '203.0.113.53'
+      })
+
+      expect(refreshed.statusCode).toBe(200)
+      expect(decodeJwt(refreshed.json().accessToken).org).toBe(other.id)
+      expect(refreshed.json().user.organization.name).toBe('Annat Bolag AB')
+    } finally {
+      await prisma.user.update({ where: { id: userId }, data: { organizationId } })
+      await cleanupOrganizations([other.id])
+    }
   })
 
   test('rejects a request with no cookie', async () => {

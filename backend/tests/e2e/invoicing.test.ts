@@ -9,10 +9,12 @@ import type { FastifyInstance } from 'fastify'
 import {
   buildTestApp,
   createTestUser,
+  createTestOrganization,
   loginAs,
   authed,
   clearRateLimits,
   cleanupUsers,
+  cleanupOrganizations,
   uniqueSuffix,
   testPasswordHash,
   prisma
@@ -20,6 +22,7 @@ import {
 import { VatRate, formatOre } from '../../src/lib/money.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 const ADMIN_EMAIL = `e2e-admin-${suffix}@fakturly.se`
 const CLIENT_EMAIL = `e2e-kund-${suffix}@kund.se`
@@ -36,12 +39,14 @@ let invoiceNumber: string
 
 beforeAll(async () => {
   app = await buildTestApp()
-  adminId = (await createTestUser(ADMIN_EMAIL, 'ADMIN')).id
+  organizationId = (await createTestOrganization()).id
+  adminId = (await createTestUser(organizationId, ADMIN_EMAIL, 'ADMIN')).id
   userIds.push(adminId)
 })
 
 afterAll(async () => {
   await cleanupUsers(userIds)
+  await cleanupOrganizations([organizationId])
   // NOTE: the invoice-number counter is deliberately NOT reset here.
   //
   // It is monotonic by design — rewinding it while invoices bearing those

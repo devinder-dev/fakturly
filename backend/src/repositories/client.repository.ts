@@ -34,8 +34,14 @@ export type CreatedClient = {
  *
  * Note the role is hardcoded to CLIENT here, not taken from an argument.
  * Nothing reachable from an HTTP request can create an ADMIN.
+ *
+ * organizationId is a separate first argument rather than a field of `input`:
+ * every tenant-scoped repository function takes it first, so a call site that
+ * forgot it does not compile, and a reviewer reads the tenant before anything
+ * else. The caller passes the ADMIN's organization, from the verified token.
  */
 export async function createClientWithUser(
+  organizationId: string,
   input: CreateClientWithUserInput
 ): Promise<CreatedClient> {
   return prisma.$transaction(async (tx) => {
@@ -43,7 +49,8 @@ export async function createClientWithUser(
       data: {
         email: input.email,
         password: input.passwordHash,
-        role: 'CLIENT'
+        role: 'CLIENT',
+        organizationId
       },
       select: { id: true, email: true }
     })

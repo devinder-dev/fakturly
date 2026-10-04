@@ -5,10 +5,12 @@ import type { FastifyInstance } from 'fastify'
 import {
   buildTestApp,
   createTestUser,
+  createTestOrganization,
   loginAs,
   authed,
   clearRateLimits,
   cleanupUsers,
+  cleanupOrganizations,
   uniqueSuffix,
   testPasswordHash,
   prisma
@@ -19,6 +21,7 @@ import { runOverdueCheck } from '../../src/services/overdue.service.ts'
 import * as invoiceRepository from '../../src/repositories/invoice.repository.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 const ADMIN_EMAIL = `cn-admin-${suffix}@fakturly.se`
 const CLIENT_EMAIL = `cn-kund-${suffix}@kund.se`
@@ -37,7 +40,8 @@ const ITEMS = [
 
 beforeAll(async () => {
   app = await buildTestApp()
-  userIds.push((await createTestUser(ADMIN_EMAIL, 'ADMIN')).id)
+  organizationId = (await createTestOrganization()).id
+  userIds.push((await createTestUser(organizationId, ADMIN_EMAIL, 'ADMIN')).id)
   adminToken = (await loginAs(app, ADMIN_EMAIL, '198.51.100.150')).accessToken
 
   const created = await asAdmin()('POST', '/clients', { email: CLIENT_EMAIL, name: 'Kredit AB' })
@@ -52,6 +56,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanupUsers(userIds)
+  await cleanupOrganizations([organizationId])
   await clearRateLimits()
 })
 

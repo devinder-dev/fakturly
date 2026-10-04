@@ -31,13 +31,18 @@ const REFRESH_TOKEN_MS = env.REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000
  * What we put in an access token — and, just as importantly, what we do NOT.
  *
  * A JWT is base64, not encryption. Anyone holding it can read every claim.
- * So: no email, no name, no invoice data. Only an opaque user id and the role
- * we need for authorisation.
+ * So: no email, no name, no invoice data. Only an opaque user id, the role and
+ * the organization id we need for authorisation.
  */
 export type AccessTokenClaims = {
   /** Subject — the user id. */
   sub: string
   role: Role
+  /**
+   * The caller's organization id. An opaque cuid, not PII. Carried in the
+   * token so scoping a query to the caller's tenant costs no database lookup.
+   */
+  org: string
   /** JWT ID — unique per token. This is what logout adds to the denylist. */
   jti: string
   iat: number
@@ -66,7 +71,16 @@ const verifyAccessTokenSignature = createVerifier({
   algorithms: ['HS256'],
   allowedIss: ISSUER,
   allowedAud: AUDIENCE,
-  requiredClaims: ['sub', 'jti', 'exp']
+  // `org` is required, so a token minted before multi-tenancy is rejected
+  // outright: the client gets one 401, refreshes, and the refresh reads the
+  // organization from the database. Accepting it instead would leave a caller
+  // with NO tenant in the system for up to 15 minutes — a state every scoped
+  // query after this would have to remember to handle.
+  //
+  // iss and aud are listed too, because allowedIss/allowedAud only check a
+  // claim that is PRESENT: fast-jwt skips the validator when the claim is
+  // missing, so a token with no `aud` at all would pass the audience pin.
+  requiredClaims: ['sub', 'jti', 'exp', 'role', 'org', 'iss', 'aud']
 })
 
 // ─────────────────────────────────────────────────────────────
@@ -79,9 +93,13 @@ export type CreatedAccessToken = {
   expiresAt: Date
 }
 
-export function createAccessToken(userId: string, role: Role): CreatedAccessToken {
+export function createAccessToken(
+  userId: string,
+  role: Role,
+  organizationId: string
+): CreatedAccessToken {
   const jti = randomUUID()
-  const token = signAccessToken({ sub: userId, role, jti })
+  const token = signAccessToken({ sub: userId, role, org: organizationId, jti })
 
   return {
     token,
@@ -104,7 +122,14 @@ export function createAccessToken(userId: string, role: Role): CreatedAccessToke
  */
 export function verifyAccessToken(token: string): AccessTokenClaims {
   try {
-    return verifyAccessTokenSignature(token) as AccessTokenClaims
+    const claims = verifyAccessTokenSignature(token) as AccessTokenClaims
+
+    // requiredClaims proves `org` is present, not that it is usable: `null`
+    // or "" would pass, and every scoped query would then filter on nothing.
+    if (typeof claims.org !== 'string' || claims.org === '') {
+      throw new UnauthenticatedError()
+    }
+    return claims
   } catch {
     throw new UnauthenticatedError()
   }

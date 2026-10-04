@@ -9,26 +9,44 @@
 //
 // Run:  bun run seed
 //
-// Reads ADMIN_EMAIL and ADMIN_PASSWORD from the environment. The password is
-// never hardcoded and never printed.
+// Reads ADMIN_ORG_NUMBER, ADMIN_EMAIL and ADMIN_PASSWORD from the
+// environment. The password is never hardcoded and never printed.
+//
+// Every user belongs to an organization, so the organization must exist
+// first — create it with `bun run org:create`. The admin is attached to it by
+// its organisationsnummer, which a human knows, rather than our internal id.
 
 import 'dotenv/config'
 import { prisma } from '../src/lib/prisma.ts'
 import { hashPassword } from '../src/services/password.service.ts'
 import { assertPasswordNotBreached } from '../src/services/password.service.ts'
 import { newPasswordSchema, emailSchema } from '../src/validators/auth.validator.ts'
+import { orgNumberSchema } from '../src/validators/organization.validator.ts'
+import { findOrganizationByOrgNumber } from '../src/repositories/organization.repository.ts'
 
 async function main() {
+  const rawOrgNumber = process.env.ADMIN_ORG_NUMBER
   const rawEmail = process.env.ADMIN_EMAIL
   const rawPassword = process.env.ADMIN_PASSWORD
 
-  if (!rawEmail || !rawPassword) {
+  if (!rawOrgNumber || !rawEmail || !rawPassword) {
     console.error(
-      'Missing ADMIN_EMAIL or ADMIN_PASSWORD.\n\n' +
+      'Missing ADMIN_ORG_NUMBER, ADMIN_EMAIL or ADMIN_PASSWORD.\n\n' +
         'Run it like this (note the leading space, which keeps the password\n' +
         'out of your shell history in bash/zsh):\n\n' +
-        '  ADMIN_EMAIL=admin@fakturly.se ADMIN_PASSWORD="a long passphrase" bun run seed\n'
+        '  ADMIN_ORG_NUMBER=559123-4567 ADMIN_EMAIL=admin@fakturly.se ADMIN_PASSWORD="a long passphrase" bun run seed\n\n' +
+        'The organization must exist first: create it with bun run org:create\n' +
+        '(usage at the top of prisma/create-organization.ts).\n'
     )
+    process.exit(1)
+  }
+
+  // Normalised the same way org:create stored it, so "5591234567" finds
+  // the organization saved as "559123-4567".
+  const orgNumber = orgNumberSchema.parse(rawOrgNumber)
+  const organization = await findOrganizationByOrgNumber(orgNumber)
+  if (!organization) {
+    console.error(`No organization with organisationsnummer ${orgNumber}. Run bun run org:create first.`)
     process.exit(1)
   }
 
@@ -41,6 +59,14 @@ async function main() {
 
   const existing = await prisma.user.findUnique({ where: { email } })
   if (existing) {
+    // Re-running for the same org is harmless. For a DIFFERENT org it is not:
+    // emails are unique across all organizations, so "nothing to do" would
+    // leave the operator believing the new tenant has its admin when it
+    // has none.
+    if (existing.organizationId !== organization.id) {
+      console.error(`${email} already belongs to another organization. Use a different email.`)
+      process.exit(1)
+    }
     console.log(`Admin ${email} already exists (${existing.role}). Nothing to do.`)
     return
   }
@@ -51,12 +77,13 @@ async function main() {
       password: await hashPassword(password),
       // The ONLY place in the codebase where role is set to ADMIN. Nothing
       // reachable over HTTP can produce one.
-      role: 'ADMIN'
+      role: 'ADMIN',
+      organizationId: organization.id
     },
     select: { id: true, email: true, role: true }
   })
 
-  console.log(`Created ${admin.role}: ${admin.email} (${admin.id})`)
+  console.log(`Created ${admin.role}: ${admin.email} (${admin.id}) in ${organization.name}`)
   console.log('The password was not stored anywhere in plain text.')
 }
 

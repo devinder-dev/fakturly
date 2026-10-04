@@ -5,14 +5,17 @@ import type { FastifyInstance } from 'fastify'
 import {
   buildTestApp,
   createTestUser,
+  createTestOrganization,
   loginAs,
   authed,
   clearRateLimits,
   cleanupUsers,
+  cleanupOrganizations,
   uniqueSuffix
 } from '../helpers.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 const ADMIN_EMAIL = `audit-admin-${suffix}@fakturly.se`
 
@@ -25,7 +28,8 @@ const asAdmin = () => authed(app, adminToken)
 
 beforeAll(async () => {
   app = await buildTestApp()
-  adminId = (await createTestUser(ADMIN_EMAIL, 'ADMIN')).id
+  organizationId = (await createTestOrganization()).id
+  adminId = (await createTestUser(organizationId, ADMIN_EMAIL, 'ADMIN')).id
   userIds.push(adminId)
   adminToken = (await loginAs(app, ADMIN_EMAIL, '198.51.100.180')).accessToken
 
@@ -36,13 +40,14 @@ beforeAll(async () => {
   clientId = created.json().client.id
   userIds.push(created.json().client.userId)
 
-  const other = await createTestUser(`audit-kund2-${suffix}@kund.se`, 'CLIENT')
+  const other = await createTestUser(organizationId, `audit-kund2-${suffix}@kund.se`, 'CLIENT')
   userIds.push(other.id)
   clientToken = (await loginAs(app, other.email, '198.51.100.181')).accessToken
 })
 
 afterAll(async () => {
   await cleanupUsers(userIds)
+  await cleanupOrganizations([organizationId])
   await clearRateLimits()
 })
 

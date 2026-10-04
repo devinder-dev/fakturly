@@ -9,6 +9,7 @@
 // The cost is that tests must not collide with each other. Every test file
 // generates its own unique identifiers and cleans up after itself.
 
+import { randomInt } from 'node:crypto'
 import { buildApp } from '../src/app.ts'
 import { prisma } from '../src/lib/prisma.ts'
 import { redis } from '../src/lib/redis.ts'
@@ -74,18 +75,70 @@ export async function clearRateLimits(): Promise<void> {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Tenants
+// ─────────────────────────────────────────────────────────────
+
+export type TestOrganization = {
+  id: string
+  name: string
+  orgNumber: string
+}
+
+/**
+ * An organization with a random, unique organisationsnummer.
+ *
+ * Written straight to the table, not through organization.service: these are
+ * fixtures, and a test about invoices should not depend on the org validator.
+ * (Random digits are not a valid Luhn number, which is exactly why.)
+ */
+export async function createTestOrganization(
+  name = 'Testbolaget AB'
+): Promise<TestOrganization> {
+  const digits = String(randomInt(0, 10_000_000_000)).padStart(10, '0')
+  return prisma.organization.create({
+    data: {
+      name,
+      orgNumber: `${digits.slice(0, 6)}-${digits.slice(6)}`,
+      address: 'Testgatan 1, 111 11 Stockholm',
+      email: 'faktura@testbolaget.example.se'
+    },
+    select: { id: true, name: true, orgNumber: true }
+  })
+}
+
+export type TestTenant = {
+  organization: TestOrganization
+  admin: TestUser
+}
+
+/** An organization with one ADMIN in it — the unit cross-tenant tests compare. */
+export async function createTestTenant(
+  adminEmail: string,
+  name?: string
+): Promise<TestTenant> {
+  const organization = await createTestOrganization(name)
+  const admin = await createTestUser(organization.id, adminEmail, 'ADMIN')
+  return { organization, admin }
+}
+
 export type TestUser = {
   id: string
   email: string
   role: Role
 }
 
+/**
+ * organizationId is required and first, like in the tenant repositories: a
+ * user without an organization cannot exist, so a test cannot make one.
+ */
 export async function createTestUser(
+  organizationId: string,
   email: string,
   role: Role = 'CLIENT'
 ): Promise<TestUser> {
   const user = await prisma.user.create({
-    data: { email, password: await testPasswordHash(), role },
+    data: { email, password: await testPasswordHash(), role, organizationId },
     select: { id: true, email: true, role: true }
   })
   return user
@@ -180,6 +233,30 @@ export async function cleanupUsers(userIds: string[]): Promise<void> {
   }
 
   await prisma.user.deleteMany({ where: { id: { in: userIds } } })
+}
+
+/**
+ * Removes organizations and EVERYTHING in them.
+ *
+ * Every user still in the organization goes first — including client users a
+ * test provisioned through POST /clients and never tracked — because the
+ * foreign key refuses to delete an organization anyone belongs to. Call it
+ * after (or instead of) cleanupUsers.
+ */
+export async function cleanupOrganizations(organizationIds: string[]): Promise<void> {
+  if (organizationIds.length === 0) return
+
+  const users = await prisma.user.findMany({
+    where: { organizationId: { in: organizationIds } },
+    select: { id: true }
+  })
+  await cleanupUsers(users.map((u) => u.id))
+
+  // ORGANIZATION_CREATED rows have no userId, so cleanupUsers misses them.
+  await prisma.auditLog.deleteMany({
+    where: { resource: 'Organization', resourceId: { in: organizationIds } }
+  })
+  await prisma.organization.deleteMany({ where: { id: { in: organizationIds } } })
 }
 
 /** Audit rows written for an attempted email that never became a user. */

@@ -5,10 +5,12 @@ import type { FastifyInstance } from 'fastify'
 import {
   buildTestApp,
   createTestUser,
+  createTestOrganization,
   loginAs,
   authed,
   clearRateLimits,
   cleanupUsers,
+  cleanupOrganizations,
   uniqueSuffix,
   prisma
 } from '../helpers.ts'
@@ -20,6 +22,7 @@ import type { Job } from 'bullmq'
 import type { EmailJobData } from '../../src/jobs/queues.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 const ADMIN_EMAIL = `rem-admin-${suffix}@fakturly.se`
 
@@ -30,7 +33,8 @@ const asAdmin = () => authed(app, adminToken)
 
 beforeAll(async () => {
   app = await buildTestApp()
-  userIds.push((await createTestUser(ADMIN_EMAIL, 'ADMIN')).id)
+  organizationId = (await createTestOrganization()).id
+  userIds.push((await createTestUser(organizationId, ADMIN_EMAIL, 'ADMIN')).id)
   adminToken = (await loginAs(app, ADMIN_EMAIL, '198.51.100.160')).accessToken
 
   const created = await asAdmin()('POST', '/clients', {
@@ -47,6 +51,7 @@ afterAll(async () => {
   await getEmailQueue().drain()
   await closeQueues()
   await cleanupUsers(userIds)
+  await cleanupOrganizations([organizationId])
   await clearRateLimits()
 })
 

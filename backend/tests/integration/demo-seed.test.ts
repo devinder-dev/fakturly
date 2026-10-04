@@ -36,6 +36,14 @@ describe.skipIf(!allowed)('resetDemoData', () => {
     }
   })
 
+  test('🏢 everyone belongs to the one demo organization', async () => {
+    const organizations = await prisma.organization.findMany({ select: { id: true } })
+    expect(organizations).toHaveLength(summary.organizations)
+
+    const users = await prisma.user.groupBy({ by: ['organizationId'], _count: true })
+    expect(users).toEqual([{ organizationId: organizations[0]!.id, _count: summary.users }])
+  })
+
   test('the numbers form an unbroken series starting at 0001', async () => {
     const invoices = await prisma.invoice.findMany({
       orderBy: { invoiceNumber: 'asc' },

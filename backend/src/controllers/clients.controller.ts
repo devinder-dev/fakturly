@@ -11,7 +11,7 @@ import {
 import * as clientService from '../services/client.service.ts'
 import { UnauthenticatedError } from '../lib/errors.ts'
 import type { ClientRecord } from '../repositories/client.repository.ts'
-import type { AuthenticatedUser } from '../types/auth.ts'
+import { toActor, type AuthenticatedUser } from '../types/auth.ts'
 
 /**
  * Shapes a client for the API.
@@ -57,7 +57,7 @@ export async function createClient(request: FastifyRequest, reply: FastifyReply)
 
   const created = await clientService.createClient(
     input,
-    admin.id,
+    toActor(admin),
     requestContext(request)
   )
 

@@ -8,10 +8,12 @@ import type { FastifyInstance } from 'fastify'
 import {
   buildTestApp,
   createTestUser,
+  createTestOrganization,
   loginAs,
   authed,
   clearRateLimits,
   cleanupUsers,
+  cleanupOrganizations,
   uniqueSuffix,
   prisma
 } from '../helpers.ts'
@@ -20,6 +22,7 @@ import { VatRate } from '../../src/lib/money.ts'
 import { signStubPayload } from '../../src/lib/stripe.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 const ADMIN_EMAIL = `hard-admin-${suffix}@fakturly.se`
 let adminToken: string
@@ -30,7 +33,8 @@ const eventIds: string[] = []
 
 beforeAll(async () => {
   app = await buildTestApp()
-  userIds.push((await createTestUser(ADMIN_EMAIL, 'ADMIN')).id)
+  organizationId = (await createTestOrganization()).id
+  userIds.push((await createTestUser(organizationId, ADMIN_EMAIL, 'ADMIN')).id)
   const login = await loginAs(app, ADMIN_EMAIL, '198.51.100.190')
   adminToken = login.accessToken
   refreshCookie = login.refreshCookie
@@ -46,6 +50,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await prisma.processedWebhookEvent.deleteMany({ where: { id: { in: eventIds } } })
   await cleanupUsers(userIds)
+  await cleanupOrganizations([organizationId])
   await clearRateLimits()
 })
 

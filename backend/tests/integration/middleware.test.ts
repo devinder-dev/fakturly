@@ -5,17 +5,23 @@ import type { FastifyInstance } from 'fastify'
 import {
   buildTestApp,
   createTestUser,
+  createTestOrganization,
   loginAs,
   clearRateLimits,
   cleanupUsers,
+  cleanupOrganizations,
   uniqueSuffix,
   prisma
 } from '../helpers.ts'
 import { authenticate } from '../../src/middleware/authenticate.ts'
 import { authorize } from '../../src/middleware/authorize.ts'
 import { createAccessToken } from '../../src/services/token.service.ts'
+import { createSigner } from 'fast-jwt'
+import { randomUUID } from 'node:crypto'
+import { env } from '../../src/lib/env.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 const ADMIN_EMAIL = `mw-admin-${suffix}@exempel.se`
 const CLIENT_EMAIL = `mw-client-${suffix}@exempel.se`
@@ -28,7 +34,8 @@ let clientToken: string
 beforeAll(async () => {
   app = await buildTestApp((instance) => {
     instance.get('/_t/admin', { onRequest: [authenticate, authorize('ADMIN')] }, async (req) => ({
-      role: req.authUser?.role
+      role: req.authUser?.role,
+      organizationId: req.authUser?.organizationId
     }))
     instance.get('/_t/client', { onRequest: [authenticate, authorize('CLIENT')] }, async () => ({
       ok: true
@@ -44,8 +51,9 @@ beforeAll(async () => {
     }))
   })
 
-  adminId = (await createTestUser(ADMIN_EMAIL, 'ADMIN')).id
-  clientId = (await createTestUser(CLIENT_EMAIL, 'CLIENT')).id
+  organizationId = (await createTestOrganization()).id
+  adminId = (await createTestUser(organizationId, ADMIN_EMAIL, 'ADMIN')).id
+  clientId = (await createTestUser(organizationId, CLIENT_EMAIL, 'CLIENT')).id
 
   adminToken = (await loginAs(app, ADMIN_EMAIL, '198.51.100.30')).accessToken
   clientToken = (await loginAs(app, CLIENT_EMAIL, '198.51.100.31')).accessToken
@@ -53,6 +61,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanupUsers([adminId, clientId])
+  await cleanupOrganizations([organizationId])
   await clearRateLimits()
 })
 
@@ -114,6 +123,65 @@ describe('authenticate accepts a valid token', () => {
   test('/auth/me reads the database, so the email is present despite not being in the token', async () => {
     const res = await get('/auth/me', `Bearer ${adminToken}`)
     expect(res.json().user.email).toBe(ADMIN_EMAIL)
+  })
+})
+
+describe('🏢 the organization claim', () => {
+  test('authenticate hands the caller\'s organization to the handler', async () => {
+    const res = await get('/_t/admin', `Bearer ${adminToken}`)
+    expect(res.json().organizationId).toBe(organizationId)
+  })
+
+  test('/auth/me names the organization', async () => {
+    const res = await get('/auth/me', `Bearer ${adminToken}`)
+    expect(res.json().user.organization).toEqual({ id: organizationId, name: 'Testbolaget AB' })
+  })
+
+  test('a correctly signed token WITHOUT org is refused — and the same token with it is not', async () => {
+    // Signed exactly like a real token: same secret, algorithm, issuer and
+    // audience. The ONLY difference between the two is the org claim, which
+    // is what a token minted before multi-tenancy looks like.
+    const sign = createSigner({
+      key: env.JWT_SECRET,
+      algorithm: 'HS256',
+      expiresIn: 60_000,
+      iss: 'fakturly',
+      aud: 'fakturly-api'
+    })
+    const withoutOrg = sign({ sub: adminId, role: 'ADMIN', jti: randomUUID() })
+    const withOrg = sign({ sub: adminId, role: 'ADMIN', org: organizationId, jti: randomUUID() })
+
+    expect((await get('/auth/me', `Bearer ${withoutOrg}`)).statusCode).toBe(401)
+    expect((await get('/auth/me', `Bearer ${withOrg}`)).statusCode).toBe(200)
+    // Refused rather than treated as "no tenant": the client refreshes once
+    // and gets a token that has one. See requiredClaims in token.service.ts.
+  })
+
+  test.each([
+    ['an empty org', { org: '' }],
+    ['a null org', { org: null }],
+    ['no role', { role: undefined }]
+  ])('a correctly signed token with %s is refused', async (_label, override) => {
+    const sign = createSigner({
+      key: env.JWT_SECRET,
+      algorithm: 'HS256',
+      expiresIn: 60_000,
+      iss: 'fakturly',
+      aud: 'fakturly-api'
+    })
+    const claims: Record<string, unknown> = { sub: adminId, role: 'ADMIN', org: organizationId, jti: randomUUID(), ...override }
+    if (claims.role === undefined) delete claims.role
+
+    expect((await get('/auth/me', `Bearer ${sign(claims)}`)).statusCode).toBe(401)
+  })
+
+  test('🔒 a token with no audience at all is refused, not waved through the audience pin', async () => {
+    // fast-jwt only checks aud when the claim is present. Signed with OUR
+    // secret, a token minted for no audience used to verify fine.
+    const noAudience = createSigner({ key: env.JWT_SECRET, algorithm: 'HS256', expiresIn: 60_000, iss: 'fakturly' })
+    const token = noAudience({ sub: adminId, role: 'ADMIN', org: organizationId, jti: randomUUID() })
+
+    expect((await get('/auth/me', `Bearer ${token}`)).statusCode).toBe(401)
   })
 })
 
@@ -185,8 +253,8 @@ describe('a misconfigured route fails CLOSED', () => {
 
 describe('a token outliving its user', () => {
   test('stops working once the user is deleted', async () => {
-    const ghost = await createTestUser(`ghost-${suffix}@exempel.se`, 'CLIENT')
-    const token = createAccessToken(ghost.id, 'CLIENT').token
+    const ghost = await createTestUser(organizationId, `ghost-${suffix}@exempel.se`, 'CLIENT')
+    const token = createAccessToken(ghost.id, 'CLIENT', organizationId).token
 
     expect((await get('/auth/me', `Bearer ${token}`)).statusCode).toBe(200)
 

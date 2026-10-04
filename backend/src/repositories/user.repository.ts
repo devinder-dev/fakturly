@@ -13,7 +13,18 @@ export type AuthUser = {
   email: string
   password: string
   role: Role
+  /** Read on every login AND every refresh — the token's `org` claim is
+   *  always minted from this row, never copied from an older token. */
+  organization: { id: string; name: string }
 }
+
+const authUserSelect = {
+  id: true,
+  email: true,
+  password: true,
+  role: true,
+  organization: { select: { id: true, name: true } }
+} as const
 
 /**
  * Looks up a user by email for the login flow.
@@ -27,17 +38,11 @@ export type AuthUser = {
  * equality match is correct.
  */
 export async function findAuthUserByEmail(email: string): Promise<AuthUser | null> {
-  return prisma.user.findUnique({
-    where: { email },
-    select: { id: true, email: true, password: true, role: true }
-  })
+  return prisma.user.findUnique({ where: { email }, select: authUserSelect })
 }
 
 export async function findAuthUserById(id: string): Promise<AuthUser | null> {
-  return prisma.user.findUnique({
-    where: { id },
-    select: { id: true, email: true, password: true, role: true }
-  })
+  return prisma.user.findUnique({ where: { id }, select: authUserSelect })
 }
 
 /**

@@ -11,10 +11,12 @@ import type { FastifyInstance } from 'fastify'
 import {
   buildTestApp,
   createTestUser,
+  createTestOrganization,
   loginAs,
   authed,
   clearRateLimits,
   cleanupUsers,
+  cleanupOrganizations,
   uniqueSuffix,
   testPasswordHash,
   prisma
@@ -24,6 +26,7 @@ import { runOverdueCheck } from '../../src/services/overdue.service.ts'
 import { calculateLateInterest, VatRate, formatOre } from '../../src/lib/money.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 const ADMIN_EMAIL = `life-admin-${suffix}@fakturly.se`
 const CLIENT_EMAIL = `life-kund-${suffix}@kund.se`
@@ -40,7 +43,8 @@ const dayAfter = (days: number) => new Date(DUE.getTime() + days * 86_400_000)
 
 beforeAll(async () => {
   app = await buildTestApp()
-  userIds.push((await createTestUser(ADMIN_EMAIL, 'ADMIN')).id)
+  organizationId = (await createTestOrganization()).id
+  userIds.push((await createTestUser(organizationId, ADMIN_EMAIL, 'ADMIN')).id)
   adminToken = (await loginAs(app, ADMIN_EMAIL, '198.51.100.95')).accessToken
 
   const created = await asAdmin()('POST', '/clients', {
@@ -62,6 +66,7 @@ afterAll(async () => {
   await prisma.emailLog.deleteMany({ where: { userId: { in: userIds } } })
   await prisma.passwordToken.deleteMany({ where: { userId: { in: userIds } } })
   await cleanupUsers(userIds)
+  await cleanupOrganizations([organizationId])
   // NOTE: the invoice-number counter is deliberately NOT reset here.
   //
   // It is monotonic by design — rewinding it while invoices bearing those

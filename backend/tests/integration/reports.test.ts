@@ -9,10 +9,12 @@ import type { FastifyInstance } from 'fastify'
 import {
   buildTestApp,
   createTestUser,
+  createTestOrganization,
   loginAs,
   authed,
   clearRateLimits,
   cleanupUsers,
+  cleanupOrganizations,
   uniqueSuffix,
   prisma
 } from '../helpers.ts'
@@ -21,6 +23,7 @@ import { agingBucket, agingReport, vatReport } from '../../src/services/report.s
 import { runOverdueCheck } from '../../src/services/overdue.service.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 const ADMIN_EMAIL = `rep-admin-${suffix}@fakturly.se`
 
@@ -34,7 +37,8 @@ const AS_OF = new Date('2026-09-04T12:00:00Z')
 
 beforeAll(async () => {
   app = await buildTestApp()
-  userIds.push((await createTestUser(ADMIN_EMAIL, 'ADMIN')).id)
+  organizationId = (await createTestOrganization()).id
+  userIds.push((await createTestUser(organizationId, ADMIN_EMAIL, 'ADMIN')).id)
   adminToken = (await loginAs(app, ADMIN_EMAIL, '198.51.100.170')).accessToken
 
   const created = await asAdmin()('POST', '/clients', {
@@ -43,7 +47,7 @@ beforeAll(async () => {
   })
   clientId = created.json().client.id
   userIds.push(created.json().client.userId)
-  const clientUser = await createTestUser(`rep-kund2-${suffix}@kund.se`, 'CLIENT')
+  const clientUser = await createTestUser(organizationId, `rep-kund2-${suffix}@kund.se`, 'CLIENT')
   userIds.push(clientUser.id)
   clientToken = (await loginAs(app, clientUser.email, '198.51.100.171')).accessToken
 
@@ -64,6 +68,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanupUsers(userIds)
+  await cleanupOrganizations([organizationId])
   await clearRateLimits()
 })
 

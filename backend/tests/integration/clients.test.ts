@@ -5,16 +5,19 @@ import type { FastifyInstance } from 'fastify'
 import {
   buildTestApp,
   createTestUser,
+  createTestOrganization,
   loginAs,
   authed,
   clearRateLimits,
   cleanupUsers,
+  cleanupOrganizations,
   uniqueSuffix,
   testPasswordHash,
   prisma
 } from '../helpers.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 const ADMIN_EMAIL = `cl-admin-${suffix}@fakturly.se`
 
@@ -29,7 +32,8 @@ const userIds: string[] = []
 beforeAll(async () => {
   app = await buildTestApp()
 
-  adminId = (await createTestUser(ADMIN_EMAIL, 'ADMIN')).id
+  organizationId = (await createTestOrganization()).id
+  adminId = (await createTestUser(organizationId, ADMIN_EMAIL, 'ADMIN')).id
   userIds.push(adminId)
   adminToken = (await loginAs(app, ADMIN_EMAIL, '198.51.100.40')).accessToken
 
@@ -62,7 +66,47 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanupUsers(userIds)
+  await cleanupOrganizations([organizationId])
   await clearRateLimits()
+})
+
+describe('🏢 provisioning puts the client in the admin\'s organization', () => {
+  test('the new client user belongs to the admin\'s organization', async () => {
+    const res = await authed(app, adminToken)('POST', '/clients', {
+      email: `org-${suffix}@kund.se`,
+      name: 'Org Kund AB'
+    })
+    expect(res.statusCode).toBe(201)
+
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { id: res.json().client.userId },
+      select: { organizationId: true }
+    })
+    expect(user.organizationId).toBe(organizationId)
+  })
+
+  test('an organizationId in the body is ignored — the tenant comes from the token', async () => {
+    const other = await createTestOrganization('Främmande AB')
+    try {
+      const res = await authed(app, adminToken)('POST', '/clients', {
+        email: `smuggle-${suffix}@kund.se`,
+        name: 'Smuggel AB',
+        organizationId: other.id
+      })
+      expect(res.statusCode).toBe(201)
+
+      const user = await prisma.user.findUniqueOrThrow({
+        where: { id: res.json().client.userId },
+        select: { organizationId: true }
+      })
+      // Zod strips the unknown key; the service never had a way to receive
+      // one. Planting a client in another company is not blocked by a check
+      // — there is no path for it.
+      expect(user.organizationId).toBe(organizationId)
+    } finally {
+      await cleanupOrganizations([other.id])
+    }
+  })
 })
 
 describe('POST /clients', () => {

@@ -4,7 +4,13 @@
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import type { FastifyInstance } from 'fastify'
-import { buildTestApp, uniqueSuffix, prisma } from '../helpers.ts'
+import {
+  buildTestApp,
+  createTestOrganization,
+  cleanupOrganizations,
+  uniqueSuffix,
+  prisma
+} from '../helpers.ts'
 import {
   InvalidCredentialsError,
   AccountLockedError,
@@ -17,9 +23,12 @@ import {
 import { loginSchema } from '../../src/validators/auth.validator.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 
 beforeAll(async () => {
+  organizationId = (await createTestOrganization()).id
+
   // Test-only routes that throw each error type, so they pass through the
   // real error handler exactly as a production route would.
   app = await buildTestApp((instance) => {
@@ -62,14 +71,15 @@ beforeAll(async () => {
     })
     instance.get('/_t/prisma', async () => {
       const email = `dubblett-${suffix}@test.se`
-      await prisma.user.create({ data: { email, password: 'x' } })
-      await prisma.user.create({ data: { email, password: 'x' } }) // P2002
+      await prisma.user.create({ data: { email, password: 'x', organizationId } })
+      await prisma.user.create({ data: { email, password: 'x', organizationId } }) // P2002
     })
   })
 })
 
 afterAll(async () => {
-  await prisma.user.deleteMany({ where: { email: { contains: `dubblett-${suffix}` } } })
+  // Also removes the dubblett- user, which lives in this organization.
+  await cleanupOrganizations([organizationId])
 })
 
 const get = (url: string) => app.inject({ method: 'GET', url })

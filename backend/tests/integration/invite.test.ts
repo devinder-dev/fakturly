@@ -5,10 +5,12 @@ import type { FastifyInstance } from 'fastify'
 import {
   buildTestApp,
   createTestUser,
+  createTestOrganization,
   loginAs,
   authed,
   clearRateLimits,
   cleanupUsers,
+  cleanupOrganizations,
   uniqueSuffix,
   TEST_PASSWORD,
   prisma
@@ -19,6 +21,7 @@ import {
 } from '../../src/services/passwordToken.service.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 const ADMIN_EMAIL = `inv-admin-${suffix}@fakturly.se`
 const CLIENT_EMAIL = `invitee-${suffix}@kund.se`
@@ -31,7 +34,8 @@ const userIds: string[] = []
 
 beforeAll(async () => {
   app = await buildTestApp()
-  adminId = (await createTestUser(ADMIN_EMAIL, 'ADMIN')).id
+  organizationId = (await createTestOrganization()).id
+  adminId = (await createTestUser(organizationId, ADMIN_EMAIL, 'ADMIN')).id
   userIds.push(adminId)
   adminToken = (await loginAs(app, ADMIN_EMAIL, '198.51.100.70')).accessToken
 })
@@ -40,6 +44,7 @@ afterAll(async () => {
   await prisma.emailLog.deleteMany({ where: { userId: { in: userIds } } })
   await prisma.passwordToken.deleteMany({ where: { userId: { in: userIds } } })
   await cleanupUsers(userIds)
+  await cleanupOrganizations([organizationId])
   await clearRateLimits()
 })
 

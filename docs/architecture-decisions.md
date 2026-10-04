@@ -1149,6 +1149,94 @@ working as designed; recorded because it will look like a flaky test next time.
 
 ---
 
+## 56. Multi-tenancy: every row belongs to an organization
+
+*Built in phases on one branch, merged as one PR. This entry grows with each
+phase; the parts marked "later" are decided but not yet built.*
+
+**Context:** Fakturly had exactly one seller, described by `env.COMPANY_*`,
+and every admin saw every row. A real invoicing SaaS serves many companies
+from one deployment. Every later feature (Bankgiro payments, Fortnox, Peppol)
+is per company, so tenancy comes first and everything after is built
+tenant-scoped from day one.
+
+**Decision — shared tables with a tenant column.** One database, and
+`organizationId` on the tables that hold a company's data. A database or
+schema per tenant isolates harder but multiplies migrations, connections and
+backups by the number of customers. The price of the shared design is that
+isolation depends on every query filtering by tenant, so it is enforced in
+three layers: composite foreign keys in SQL (later), an explicit
+`organizationId`-first parameter on every tenant repository function, and a
+cross-tenant test suite with a coverage guard (later).
+
+**Phase 1 — every user belongs to an organization:**
+
+- `Organization`: name, `orgNumber` (unique), address, email; optional
+  `vatNumber` (not every business is VAT-registered) and `bankgiro` (card-only
+  is possible); `fSkatt` (default true), `paymentTermsDays` (default 30).
+- `User.organizationId` NOT NULL, foreign key `ON DELETE RESTRICT`: deleting a
+  tenant that still has users is refused, never cascaded.
+- **Migration as expand → backfill → contract**, in one transaction: add the
+  column nullable, insert `org_default` **only if `User` has rows**, backfill,
+  then `SET NOT NULL`. A `DEFAULT` would have passed too, but would have
+  stayed on the column and filed every future user under that org. A fresh
+  database stays empty instead of gaining a phantom company. The placeholder
+  uses `env.ts`'s `COMPANY_*` defaults, since a migration cannot read the
+  environment. A deployment that set its own corrects them once in the company
+  settings (later); the demo replaces the row at its next reset.
+- **`org` claim in the access token, required.** An opaque id, not PII, so
+  scoping costs no database lookup per request. A token without it fails
+  verification. A pre-deploy session therefore gets one 401; the frontend's
+  silent refresh then issues a token with `org`, read from the database, never
+  copied from the old token. Accepting org-less tokens would have left callers
+  with no tenant for up to 15 minutes. Verified against a pre-deploy session
+  replayed on the new API: 401 → refresh 200 → retry 200.
+- **Found by the security review of this phase:** fast-jwt's `requiredClaims`
+  checks presence only, and its `allowedIss`/`allowedAud` skip a claim that
+  is *absent*. A token signed with our secret but carrying no `aud` (or no
+  `role`) verified. `requiredClaims` now lists `role`, `iss` and `aud` too,
+  and `org` must be a non-empty string. The new tests failed against the old
+  list before passing against the new one.
+- Admin writes take an `Actor = { userId, organizationId }` built from the
+  verified token (`toActor`), never two loose strings that type-check in
+  either order. `POST /clients` puts the new user in the admin's
+  organization; an `organizationId` in the body is stripped by Zod and has no
+  path into the service.
+- Organizations are created by `bun run org:create` (operator CLI, same Zod
+  schema and service as any write, audited as `ORGANIZATION_CREATED` with no
+  user). An HTTP route would need a role above ADMIN to guard it, and every
+  such role is one more target. The first admin (`bun run seed`) now needs
+  `ADMIN_ORG_NUMBER`.
+- Identifiers are **normalised before the unique index**: `5591234567` and
+  `559123-4567` are the same company and are stored as `559123-4567`;
+  otherwise the index would let one company register twice. Format checks
+  only for now. The Luhn check digit comes from the identifier library added
+  in wave 1, adopted when it merges.
+- An organisationsnummer is treated as personal data: for an enskild firma
+  it *is* the owner's personnummer. It stays out of error messages and logs.
+- **One user = one organization**, and `User.email` stays globally unique.
+  An accountant serving two client companies needs two logins. Accepted to
+  keep the token's single `org` claim honest; a membership table is the
+  upgrade path. **Known cost, open:** because a client's login email is
+  global, `POST /clients` answers 201 or 409 depending on whether the address
+  exists in *any* organization. That is a cross-tenant existence oracle.
+  Worse, one tenant can provision another tenant's customer first and block
+  them. The fix is separating a per-organization customer record from the
+  login identity. To be decided before tenants other than the demo share a
+  deployment.
+
+**Not safe to deploy on its own:** after phase 1, reads are still unscoped:
+an admin of organization B lists organization A's clients. Phases 2–3 close
+that. No deploy between phases.
+
+**Checklist for every future tenant table** (each one, every time):
+`organizationId` NOT NULL · composite foreign key to its tenant parent ·
+index leading with `organizationId` · RLS line in the migration (ADR 54) ·
+`cleanupOrganizations` (tests) and `wipeEverything` (demo) updated · a row in
+the cross-tenant isolation suite.
+
+---
+
 ## Open decisions
 
 | Question | Status |

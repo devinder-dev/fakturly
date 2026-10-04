@@ -30,6 +30,8 @@ import { hashPassword, generateTemporaryPassword } from '../services/password.se
 import * as invoiceService from '../services/invoice.service.ts'
 import * as invoiceRepository from '../repositories/invoice.repository.ts'
 import * as clientRepository from '../repositories/client.repository.ts'
+import * as organizationService from '../services/organization.service.ts'
+import { createOrganizationSchema } from '../validators/organization.validator.ts'
 import { runOverdueCheck } from '../services/overdue.service.ts'
 import { REMINDER_FEE_ORE } from '../lib/money.ts'
 
@@ -57,6 +59,19 @@ export const DEMO_ACCOUNTS = {
     label: 'Kund — Nordström Bygg AB'
   }
 } as const
+
+/**
+ * The company the demo invoices on behalf of. Same details the PDFs showed
+ * when they came from env.COMPANY_*, so the demo looks unchanged.
+ */
+const DEMO_ORGANIZATION = {
+  name: 'Fakturly Demo AB',
+  orgNumber: '559123-4567',
+  vatNumber: 'SE559123456701',
+  address: 'Sveavägen 1, 111 57 Stockholm',
+  email: 'faktura@fakturly.se',
+  bankgiro: '123-4567'
+}
 
 // ─────────────────────────────────────────────────────────────
 // The script
@@ -162,6 +177,7 @@ const SCENARIOS: Scenario[] = [
 ]
 
 export type DemoSummary = {
+  organizations: number
   users: number
   clients: number
   /** Documents in the number series, credit notes included. */
@@ -191,19 +207,26 @@ export async function resetDemoData(now: Date = new Date()): Promise<DemoSummary
 
   await wipeEverything()
 
+  // ── The organization, before anyone who belongs to it ────────
+  // Through the real validator and service, like everything else here.
+  const organization = await organizationService.createOrganization(
+    createOrganizationSchema.parse(DEMO_ORGANIZATION)
+  )
+
   // ── People ───────────────────────────────────────────────────
   const admin = await prisma.user.create({
     data: {
       email: DEMO_ACCOUNTS.admin.email,
       password: await hashPassword(DEMO_ACCOUNTS.admin.password),
-      role: 'ADMIN'
+      role: 'ADMIN',
+      organizationId: organization.id
     },
     select: { id: true }
   })
 
   const clientIds: string[] = []
   for (const client of CLIENTS) {
-    const created = await clientRepository.createClientWithUser({
+    const created = await clientRepository.createClientWithUser(organization.id, {
       email: client.email,
       passwordHash: await hashPassword(client.password ?? generateTemporaryPassword()),
       name: client.name,
@@ -328,6 +351,7 @@ export async function resetDemoData(now: Date = new Date()): Promise<DemoSummary
   // they are: the audit log records when the seed ran, which is the truth.
 
   return {
+    organizations: 1,
     users: 1 + CLIENTS.length,
     clients: CLIENTS.length,
     invoices: SCENARIOS.length + counts.credited, // each credit note is a document too
@@ -355,6 +379,9 @@ async function wipeEverything(): Promise<void> {
     prisma.auditLog.deleteMany(),
     prisma.client.deleteMany(),
     prisma.user.deleteMany(),
+    // After the users: the foreign key refuses to drop an organization
+    // anyone still belongs to.
+    prisma.organization.deleteMany(),
     prisma.invoiceNumberSeries.deleteMany()
   ])
 

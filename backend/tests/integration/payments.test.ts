@@ -9,10 +9,12 @@ import type { FastifyInstance } from 'fastify'
 import {
   buildTestApp,
   createTestUser,
+  createTestOrganization,
   loginAs,
   authed,
   clearRateLimits,
   cleanupUsers,
+  cleanupOrganizations,
   uniqueSuffix,
   prisma
 } from '../helpers.ts'
@@ -20,6 +22,7 @@ import { signStubPayload } from '../../src/lib/stripe.ts'
 import { VatRate } from '../../src/lib/money.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 const ADMIN_EMAIL = `pay-admin-${suffix}@fakturly.se`
 
@@ -33,7 +36,8 @@ const asAdmin = () => authed(app, adminToken)
 
 beforeAll(async () => {
   app = await buildTestApp()
-  adminId = (await createTestUser(ADMIN_EMAIL, 'ADMIN')).id
+  organizationId = (await createTestOrganization()).id
+  adminId = (await createTestUser(organizationId, ADMIN_EMAIL, 'ADMIN')).id
   userIds.push(adminId)
   adminToken = (await loginAs(app, ADMIN_EMAIL, '198.51.100.80')).accessToken
 
@@ -50,6 +54,7 @@ afterAll(async () => {
   await prisma.emailLog.deleteMany({ where: { userId: { in: userIds } } })
   await prisma.passwordToken.deleteMany({ where: { userId: { in: userIds } } })
   await cleanupUsers(userIds)
+  await cleanupOrganizations([organizationId])
   // NOTE: the invoice-number counter is deliberately NOT reset here.
   //
   // It is monotonic by design — rewinding it while invoices bearing those

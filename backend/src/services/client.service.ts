@@ -19,7 +19,7 @@ import type {
 } from '../repositories/client.repository.ts'
 import type { RequestContext } from './auth.service.ts'
 import { NotFoundError, ForbiddenError } from '../lib/errors.ts'
-import type { AuthenticatedUser } from '../types/auth.ts'
+import type { Actor, AuthenticatedUser } from '../types/auth.ts'
 
 export type CreateClientInput = {
   email: string
@@ -40,9 +40,11 @@ export type CreateClientInput = {
  */
 export async function createClient(
   input: CreateClientInput,
-  actingAdminId: string,
+  actor: Actor,
   context: RequestContext = {}
 ): Promise<CreatedClient> {
+  const actingAdminId = actor.userId
+
   // 256 bits from a CSPRNG, hashed with the same Argon2id parameters as any
   // real password. Hashing something nobody knows may look pointless, but it
   // keeps every row in the table uniform — no special case, no "is this a
@@ -50,7 +52,10 @@ export async function createClient(
   const temporaryPassword = generateTemporaryPassword()
   const passwordHash = await hashPassword(temporaryPassword)
 
-  const created = await clientRepository.createClientWithUser({
+  // The new client joins the ADMIN's organization. The tenant comes from the
+  // admin's verified token; the request body has no field that could pick a
+  // different one.
+  const created = await clientRepository.createClientWithUser(actor.organizationId, {
     email: input.email,
     passwordHash,
     name: input.name,

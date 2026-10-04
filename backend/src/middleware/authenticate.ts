@@ -46,14 +46,18 @@ export async function authenticate(request: FastifyRequest): Promise<void> {
 
   // Attach the caller for handlers and for authorize() to read.
   //
-  // Note what is here: an id and a role, nothing else. If a handler needs the
-  // user's email it must load it from the database. The token is base64 and
-  // readable by anyone holding it, so it carries no PII — and re-reading from
-  // the database also means a role changed five minutes ago is not stale for
-  // the remaining life of the token.
+  // Note what is here: an id, a role and an organization id, nothing else. If
+  // a handler needs the user's email it must load it from the database. The
+  // token is base64 and readable by anyone holding it, so it carries no PII —
+  // and re-reading from the database also means a role changed five minutes
+  // ago is not stale for the remaining life of the token.
+  //
+  // organizationId is the tenant every scoped query will filter on. It comes
+  // from the signed token, so no header, body or URL can choose it.
   request.authUser = {
     id: claims.sub,
     role: claims.role,
+    organizationId: claims.org,
     jti: claims.jti,
     expiresAtEpoch: claims.exp
   }

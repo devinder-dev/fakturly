@@ -39,12 +39,22 @@ export type RequestContext = {
   userAgent?: string | undefined
 }
 
+/** Who a session belongs to, as the API reports it. Never the password hash. */
+export type SessionUser = {
+  id: string
+  email: string
+  role: Role
+  /** The name is for display ("which company am I working in"); the id is
+   *  what the token carries. */
+  organization: { id: string; name: string }
+}
+
 export type AuthResult = {
   accessToken: string
   /** Raw refresh token — the controller puts this in an httpOnly cookie. */
   refreshToken: string
   refreshTokenExpiresAt: Date
-  user: { id: string; email: string; role: Role }
+  user: SessionUser
 }
 
 /**
@@ -55,13 +65,16 @@ export type AuthResult = {
  * revoked together if theft is detected.
  */
 async function issueTokenPair(
-  user: { id: string; email: string; role: Role },
+  user: SessionUser,
   familyId: string,
   context: RequestContext,
   /** When rotating: the token being spent, marked in the same transaction. */
   rotatingTokenId?: string
 ): Promise<AuthResult> {
-  const access = createAccessToken(user.id, user.role)
+  // `user` was just read from the database by login or refresh, so the
+  // organization in the new token is the CURRENT one — refresh never copies
+  // the claim forward from the token it replaces.
+  const access = createAccessToken(user.id, user.role, user.organization.id)
   const refresh = createRefreshToken()
 
   await refreshTokenRepository.createRefreshToken(
@@ -80,7 +93,14 @@ async function issueTokenPair(
     accessToken: access.token,
     refreshToken: refresh.token,
     refreshTokenExpiresAt: refresh.expiresAt,
-    user: { id: user.id, email: user.email, role: user.role }
+    // Built field by field: the caller passes an AuthUser, which still holds
+    // the password hash. Spreading it would put the hash in the response.
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      organization: { id: user.organization.id, name: user.organization.name }
+    }
   }
 }
 

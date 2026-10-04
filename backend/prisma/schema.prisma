@@ -15,16 +15,55 @@ datasource db {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Organizations — the tenant. Every user belongs to exactly one.
+// ─────────────────────────────────────────────────────────────
+
+/// The company that issues invoices. Replaces the single seller that used to
+/// live in env.COMPANY_*, so one deployment can serve many companies.
+///
+/// Required columns are what a Swedish invoice must state about the seller
+/// (name, address, organisationsnummer) plus the address replies go to.
+/// vatNumber is optional because not every business is VAT-registered;
+/// bankgiro because a business may take card payments only.
+model Organization {
+  id   String @id @default(cuid())
+  name String
+
+  /// Stored normalised as NNNNNN-NNNN (see organization.validator.ts), so the
+  /// unique index cannot be dodged by writing the same number without a dash.
+  orgNumber String  @unique
+  vatNumber String?
+  address   String
+  email     String
+  bankgiro  String?
+
+  /// Godkänd för F-skatt — the invoice must say so when it is true.
+  fSkatt           Boolean @default(true)
+  /// Default payment terms for new invoices. 30 is the Swedish norm.
+  paymentTermsDays Int     @default(30)
+
+  users     User[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────
 // Användare & roller
 // ─────────────────────────────────────────────────────────────
 
 model User {
   id             String          @id @default(cuid())
-  email          String          @unique
+  email          String          @unique // globally unique: one user = one org (ADR 56)
   password       String // Argon2id-hash — aldrig lösenord i klartext
   role           Role            @default(CLIENT)
   failedLogins   Int             @default(0) // räknar misslyckade inloggningar
   lockedUntil    DateTime? // konto låst till denna tidpunkt
+
+  // Restrict (the default): an organization that still has users cannot be
+  // deleted. Losing a tenant must be a deliberate, multi-step act.
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+
   client         Client?
   auditLogs      AuditLog[]
   refreshTokens  RefreshToken[]
@@ -32,6 +71,8 @@ model User {
   emailLogs      EmailLog[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
+
+  @@index([organizationId])
 }
 
 enum Role {

@@ -5,10 +5,12 @@ import type { FastifyInstance } from 'fastify'
 import {
   buildTestApp,
   createTestUser,
+  createTestOrganization,
   loginAs,
   authed,
   clearRateLimits,
   cleanupUsers,
+  cleanupOrganizations,
   uniqueSuffix,
   testPasswordHash,
   prisma
@@ -18,6 +20,7 @@ import { renderInvoicePdf } from '../../src/services/pdf.service.tsx'
 import * as invoiceRepository from '../../src/repositories/invoice.repository.ts'
 
 let app: FastifyInstance
+let organizationId: string
 const suffix = uniqueSuffix()
 const ADMIN_EMAIL = `pdf-admin-${suffix}@fakturly.se`
 
@@ -33,7 +36,8 @@ const asAdmin = () => authed(app, adminToken)
 
 beforeAll(async () => {
   app = await buildTestApp()
-  userIds.push((await createTestUser(ADMIN_EMAIL, 'ADMIN')).id)
+  organizationId = (await createTestOrganization()).id
+  userIds.push((await createTestUser(organizationId, ADMIN_EMAIL, 'ADMIN')).id)
   adminToken = (await loginAs(app, ADMIN_EMAIL, '198.51.100.130')).accessToken
 
   alice = (await asAdmin()('POST', '/clients', {
@@ -74,6 +78,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await cleanupUsers(userIds)
+  await cleanupOrganizations([organizationId])
   await clearRateLimits()
 })
 

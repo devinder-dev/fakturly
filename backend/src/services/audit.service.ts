@@ -54,7 +54,9 @@ export const AuditAction = {
   INVOICE_OVERDUE: 'INVOICE_OVERDUE',
   CREDIT_NOTE_ISSUED: 'CREDIT_NOTE_ISSUED',
   REMINDER_SENT: 'REMINDER_SENT',
-  REPORT_EXPORTED: 'REPORT_EXPORTED'
+  REPORT_EXPORTED: 'REPORT_EXPORTED',
+  /** No acting user — an operator ran `bun run org:create`. */
+  ORGANIZATION_CREATED: 'ORGANIZATION_CREATED'
 } as const
 
 export type AuditActionType = (typeof AuditAction)[keyof typeof AuditAction]
@@ -63,7 +65,8 @@ export const AuditResource = {
   USER: 'User',
   CLIENT: 'Client',
   REFRESH_TOKEN: 'RefreshToken',
-  INVOICE: 'Invoice'
+  INVOICE: 'Invoice',
+  ORGANIZATION: 'Organization'
 } as const
 
 export type AuditInput = Omit<AuditEntry, 'action' | 'resource'> & {

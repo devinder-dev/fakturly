@@ -8,6 +8,7 @@
     "start": "bun src/server.ts",
     "seed": "bun prisma/seed.ts",
     "seed:demo": "bun prisma/seed-demo.ts",
+    "org:create": "bun prisma/create-organization.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:unit": "bun test tests/unit",
