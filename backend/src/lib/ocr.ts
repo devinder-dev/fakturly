@@ -59,8 +59,11 @@ export function isValidLuhn(digits: string): boolean {
  * "2026-0007" becomes 20260007, then a length digit, then a Luhn check digit:
  *
  *   20260007        the invoice number's digits
- *   2026000 7 0     + length digit: the full reference is 10 characters, 10 mod 10 = 0
- *   2026000 7 0 8   + Luhn check digit over everything before it
+ *   202600070       + length digit: the full reference is 10 characters, 10 mod 10 = 0
+ *   2026000709      + Luhn check digit over everything before it
+ *
+ * (tests/unit/ocr-reverse.test.ts pins this exact value, so this comment and
+ * the code cannot drift apart again — an earlier version claimed 8.)
  *
  * The length digit is Bankgirot's "hård kontroll" variant. With it, the bank
  * also rejects a reference with a digit missing or added — which is the
@@ -80,4 +83,44 @@ export function ocrReference(invoiceNumber: string): string {
   const withLength = `${digits}${lengthDigit}`
 
   return `${withLength}${luhnCheckDigit(withLength)}`
+}
+
+/**
+ * The reverse of ocrReference: from the reference a payer typed at their
+ * bank (or that arrives in a Bankgirot file) back to the invoice number it
+ * was built from. Null when it cannot be one of our references.
+ *
+ * Possible without a database because ocrReference loses nothing: the only
+ * non-digit in an invoice number is the dash, and it always follows the
+ * 4-digit year. So: verify, strip the length and check digits, put the
+ * dash back.
+ *
+ * Rules (Bankgirot, OCR-referenskontroll: "Enbart siffror godkänns",
+ * "minst 2 tecken men max 25 tecken", length digit second to last,
+ * modulus-10 check digit last —
+ * https://www.bankgirot.se/tjanster/inbetalningar/bankgiro-inbetalningar/ocr-referenskontroll/):
+ *   - digits only, 10–25 of them. 10 because our shortest invoice number
+ *     (2026-0001) has 8 digits; 25 is Bankgirot's maximum.
+ *   - the length digit equals the length mod 10
+ *   - the Luhn check digit is valid
+ *
+ * Strict on purpose: no trimming, no stripping of spaces. The caller decides
+ * what a raw bank field may contain; this function only answers "is this
+ * exact string one of ours?".
+ *
+ * A non-null result is a CANDIDATE, not a match. It may name an invoice that
+ * does not exist, belongs to another tenant, or is a credit note (credit
+ * notes share the number series). The payment matcher must still look the
+ * invoice up and compare amounts.
+ */
+export function invoiceNumberFromOcr(reference: string): string | null {
+  if (!/^\d{10,25}$/.test(reference)) return null
+
+  const lengthDigit = Number(reference.at(-2))
+  if (lengthDigit !== reference.length % 10) return null
+
+  if (!isValidLuhn(reference)) return null
+
+  const digits = reference.slice(0, -2)
+  return `${digits.slice(0, 4)}-${digits.slice(4)}`
 }
