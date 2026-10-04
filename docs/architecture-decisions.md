@@ -1181,9 +1181,36 @@ cross-tenant test suite with a coverage guard (later).
   then `SET NOT NULL`. A `DEFAULT` would have passed too, but would have
   stayed on the column and filed every future user under that org. A fresh
   database stays empty instead of gaining a phantom company. The placeholder
-  uses `env.ts`'s `COMPANY_*` defaults, since a migration cannot read the
-  environment. A deployment that set its own corrects them once in the company
-  settings (later); the demo replaces the row at its next reset.
+  uses what were then `env.ts`'s `COMPANY_*` defaults, since a migration
+  cannot read the environment. Its organisationsnummer `559123-4567` fails the
+  Luhn check digit (as does that bankgiro), so the defaults were changed to
+  `559123-4561` / `SE559123456101` in the review round. The applied migration
+  is left as it is, because editing it would change its checksum. Phase 2's
+  migration corrects the row with an `UPDATE` and adds
+  `CHECK ("orgNumber" ~ '^[0-9]{6}-[0-9]{4}$')`. A deployment that set its own
+  `COMPANY_*` corrects the row once in the company settings (later); the demo
+  replaces it at its next reset.
+- **This migration breaks the previous release. Accepted, and documented.**
+  Old code creates users without `organizationId`, which is now NOT NULL.
+  The container runs `migrate deploy` on boot, and Render keeps the old
+  instance serving until the new one is healthy. So the old code meets the
+  new schema in three situations:
+  - **during a rolling deploy:** `POST /clients` fails until the switch;
+  - **after a failed boot:** the new code fails after migrating, the old
+    instance keeps serving, and the failures continue indefinitely;
+  - **at the nightly demo reset:** the old code wipes everything, then fails
+    to create the admin, which leaves the demo **empty**.
+
+  The zero-downtime alternative is two releases: nullable first, NOT NULL
+  once no old code runs. That doubles the deploys for a demo with no real
+  tenants yet, so it was rejected. **Rollback:** before rolling back the code,
+  run `ALTER TABLE "User" ALTER COLUMN "organizationId" DROP NOT NULL;`. The
+  old release then boots (its `migrate deploy` reports no pending migrations
+  and does not object to the newer one) and can create users again.
+  **Rolling forward again** needs the reverse by hand, because the migration
+  is already recorded as applied and will not run twice: backfill the NULLs,
+  then `SET NOT NULL`. The whole cycle was rehearsed on a scratch database,
+  and the steps are in `docs/deployment.md`.
 - **`org` claim in the access token, required.** An opaque id, not PII, so
   scoping costs no database lookup per request. A token without it fails
   verification. A pre-deploy session therefore gets one 401; the frontend's
@@ -1206,14 +1233,19 @@ cross-tenant test suite with a coverage guard (later).
   schema and service as any write, audited as `ORGANIZATION_CREATED` with no
   user). An HTTP route would need a role above ADMIN to guard it, and every
   such role is one more target. The first admin (`bun run seed`) now needs
-  `ADMIN_ORG_NUMBER`.
-- Identifiers are **normalised before the unique index**: `5591234567` and
-  `559123-4567` are the same company and are stored as `559123-4567`;
+  `ADMIN_ORG_NUMBER` and is audited as `ADMIN_CREATED`. That is the only way
+  an ADMIN comes into existence, so every admin has exactly one such row. The
+  seed refuses, with exit code 1, an email that already belongs to another
+  organization or to a non-admin. It never promotes a CLIENT, because that
+  would be a privilege escalation done as a side effect.
+- Identifiers are **normalised before the unique index**: `5591234561` and
+  `559123-4561` are the same company and are stored as `559123-4561`;
   otherwise the index would let one company register twice. Format checks
   only for now. The Luhn check digit comes from the identifier library added
   in wave 1, adopted when it merges.
 - An organisationsnummer is treated as personal data: for an enskild firma
-  it *is* the owner's personnummer. It stays out of error messages and logs.
+  it *is* the owner's personnummer. It stays out of error messages, logs and
+  the CLI's output, which prints the organization's name and id instead.
 - **One user = one organization**, and `User.email` stays globally unique.
   An accountant serving two client companies needs two logins. Accepted to
   keep the token's single `org` claim honest; a membership table is the

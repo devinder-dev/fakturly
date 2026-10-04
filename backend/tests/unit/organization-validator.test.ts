@@ -98,3 +98,53 @@ describe('the rest of the organization', () => {
     expect(createOrganizationSchema.safeParse({ ...base, ...override }).success).toBe(false)
   })
 })
+
+describe('🇸🇪 every message is Swedish — no check falls back to Zod\'s English default', () => {
+  const messagesFor = (input: unknown) =>
+    createOrganizationSchema.safeParse(input).error?.issues.map((issue) => issue.message) ?? []
+  const looksEnglish = (message: string) =>
+    /invalid|expected|received|too (big|small)|required/i.test(message)
+
+  test('missing fields say what to enter', () => {
+    expect(messagesFor({})).toEqual([
+      'Ange företagets namn',
+      'Ange organisationsnummer',
+      'Ange företagets adress',
+      'Ange e-postadress'
+    ])
+  })
+
+  test('a field of the wrong type says it is invalid, not that it is missing', () => {
+    const messages = messagesFor({
+      name: 1,
+      orgNumber: 5566778899,
+      vatNumber: 1,
+      address: 1,
+      email: 1,
+      bankgiro: 1,
+      fSkatt: 'ja',
+      paymentTermsDays: '30'
+    })
+    expect(messages).toHaveLength(8)
+    expect(messages).toContain('Ogiltigt organisationsnummer')
+    expect(messages.filter(looksEnglish)).toEqual([])
+  })
+
+  test('values that are too long', () => {
+    const long = 'x'.repeat(400)
+    const messages = messagesFor({
+      name: long,
+      orgNumber: long,
+      vatNumber: long,
+      address: long,
+      email: `${long}@exempel.se`,
+      bankgiro: long
+    })
+    expect(messages).toHaveLength(6)
+    expect(messages.filter(looksEnglish)).toEqual([])
+  })
+
+  test('input that is not an object at all', () => {
+    expect(messagesFor('hej')).toEqual(['Ogiltiga företagsuppgifter'])
+  })
+})

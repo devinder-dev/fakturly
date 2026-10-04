@@ -56,7 +56,10 @@ export const AuditAction = {
   REMINDER_SENT: 'REMINDER_SENT',
   REPORT_EXPORTED: 'REPORT_EXPORTED',
   /** No acting user — an operator ran `bun run org:create`. */
-  ORGANIZATION_CREATED: 'ORGANIZATION_CREATED'
+  ORGANIZATION_CREATED: 'ORGANIZATION_CREATED',
+  /** No acting user — an operator ran `bun run seed`. The only way an ADMIN
+   *  comes into existence, so every one of them leaves this row. */
+  ADMIN_CREATED: 'ADMIN_CREATED'
 } as const
 
 export type AuditActionType = (typeof AuditAction)[keyof typeof AuditAction]

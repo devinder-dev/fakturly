@@ -238,7 +238,7 @@ export const paths: Record<string, Record<string, unknown>> = {
     }
   },
   '/auth/refresh': {
-    post: { tags: ['Auth'], summary: 'Rotate the refresh token and issue a new access token', description: 'Reads the httpOnly cookie. Reusing a rotated token revokes the whole token family.', responses: { 200: json({ type: 'object', properties: { accessToken: { type: 'string' } } }), 401: errorResponse('No valid refresh cookie') } }
+    post: { tags: ['Auth'], summary: 'Rotate the refresh token and issue a new access token', description: 'Reads the httpOnly cookie. Reusing a rotated token revokes the whole token family.', responses: { 200: json({ type: 'object', properties: { accessToken: { type: 'string' }, user: { $ref: '#/components/schemas/User' } } }, 'New access token in the body, rotated refresh token as an httpOnly cookie. The user (and organization) is re-read from the database.'), 401: errorResponse('No valid refresh cookie') } }
   },
   '/auth/logout': {
     post: { tags: ['Auth'], summary: 'Log out', description: 'Revokes the refresh token family and denylists the access token until it expires.', responses: { 204: { description: 'Logged out' } } }

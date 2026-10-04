@@ -61,11 +61,15 @@ async function main() {
 
   const organization = await createOrganization(input)
 
-  console.log(`Created organization ${organization.name} (${organization.orgNumber})`)
+  // Name and id only. The organisationsnummer is not echoed: for an
+  // enskild firma it is the owner's personnummer (ADR 56), and terminal
+  // output ends up in shell scrollback, CI logs and screen recordings. The
+  // operator just typed it; they do not need it printed back.
+  console.log(`Created organization ${organization.name}`)
   console.log(`  id  ${organization.id}`)
   console.log('\nNext, its first admin:')
   console.log(
-    `  ADMIN_ORG_NUMBER=${organization.orgNumber} ADMIN_EMAIL=... ADMIN_PASSWORD="..." bun run seed`
+    '  ADMIN_ORG_NUMBER=<its organisationsnummer> ADMIN_EMAIL=... ADMIN_PASSWORD="..." bun run seed'
   )
 }
 

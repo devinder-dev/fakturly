@@ -102,6 +102,49 @@ committed at `backend/certs/supabase-prod-ca-2021.crt`, SHA-256
 > 2026-09-23: Neon paused the project for the rest of the month. `/health`
 > touches nothing but the process, so Render stays awake and Neon still sleeps.
 
+### Deploying the organizations migration (multi-tenancy, ADR 56)
+
+Migration `20261004091156_organizations` makes `User.organizationId` NOT NULL.
+**The release before it cannot create users against the new schema.** The
+container runs `prisma migrate deploy` on boot, before the new code serves,
+and Render keeps the old instance running until the new one is healthy. So
+expect the following:
+
+| Situation | What breaks |
+|---|---|
+| Rolling deploy | `POST /clients` returns 500 from the old instance until Render switches over |
+| The new release fails to boot after migrating | The same, for as long as the old instance keeps serving |
+| The nightly demo reset runs on the old code | It wipes everything, then fails to create the admin: the demo is **empty** |
+
+After any of these, once the new release is up, run `bun run seed:demo` from
+the Render shell if the demo was emptied.
+
+**Rolling back to the previous release.** Before switching the code back,
+make the column nullable again. Use the Supabase SQL editor, or `psql`
+against `DATABASE_URL`:
+
+```sql
+ALTER TABLE "User" ALTER COLUMN "organizationId" DROP NOT NULL;
+```
+
+The old release then boots normally (its `migrate deploy` reports "No pending
+migrations" and ignores the newer one) and can create users again. The
+`Organization` table and the foreign key stay; neither affects the old code.
+
+**Rolling forward again.** The migration is already recorded as applied, so
+`migrate deploy` will **not** redo its last step. Restore it by hand *before*
+deploying the new release. Users created during the rollback have no
+organization yet, so give them one first:
+
+```sql
+SELECT id, name FROM "Organization";   -- normally exactly one at this stage
+UPDATE "User" SET "organizationId" = '<that id>' WHERE "organizationId" IS NULL;
+ALTER TABLE "User" ALTER COLUMN "organizationId" SET NOT NULL;
+```
+
+This applies to the demo too. A reseed restores data, not constraints. And a
+reseed run from the *old* release creates users without an organization again.
+
 ## 3. Frontend — Vercel
 
 1. vercel.com → **Add New → Project** → import the repo.

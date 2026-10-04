@@ -960,8 +960,11 @@ docker compose up -d
 cd backend && bun install
 bunx prisma migrate deploy && bunx prisma generate
 
-# create the first admin
-ADMIN_EMAIL=admin@fakturly.se ADMIN_PASSWORD="en lång unik lösenordsfras" bun run seed
+# create the organization, then its first admin (every user belongs to one —
+# added with multi-tenancy, ADR 56)
+bun run org:create --name "Fakturly AB" --org-number 559123-4561 \
+  --address "Sveavägen 1, 111 57 Stockholm" --email faktura@fakturly.se
+ADMIN_ORG_NUMBER=559123-4561 ADMIN_EMAIL=admin@fakturly.se ADMIN_PASSWORD="en lång unik lösenordsfras" bun run seed
 
 bun run dev
 ```

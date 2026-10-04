@@ -39,7 +39,7 @@ describe('csv', () => {
 describe('sie', () => {
   const base = {
     companyName: 'Fakturly Demo AB',
-    orgNumber: '559123-4567',
+    orgNumber: '559123-4561',
     year: 2026,
     generatedAt: new Date('2026-09-04T10:00:00Z'),
     accounts: [{ number: '1510', name: 'Kundfordringar' }]

@@ -23,6 +23,7 @@ import { assertPasswordNotBreached } from '../src/services/password.service.ts'
 import { newPasswordSchema, emailSchema } from '../src/validators/auth.validator.ts'
 import { orgNumberSchema } from '../src/validators/organization.validator.ts'
 import { findOrganizationByOrgNumber } from '../src/repositories/organization.repository.ts'
+import { record, AuditAction, AuditResource } from '../src/services/audit.service.ts'
 
 async function main() {
   const rawOrgNumber = process.env.ADMIN_ORG_NUMBER
@@ -34,19 +35,20 @@ async function main() {
       'Missing ADMIN_ORG_NUMBER, ADMIN_EMAIL or ADMIN_PASSWORD.\n\n' +
         'Run it like this (note the leading space, which keeps the password\n' +
         'out of your shell history in bash/zsh):\n\n' +
-        '  ADMIN_ORG_NUMBER=559123-4567 ADMIN_EMAIL=admin@fakturly.se ADMIN_PASSWORD="a long passphrase" bun run seed\n\n' +
+        '  ADMIN_ORG_NUMBER=559123-4561 ADMIN_EMAIL=admin@fakturly.se ADMIN_PASSWORD="a long passphrase" bun run seed\n\n' +
         'The organization must exist first: create it with bun run org:create\n' +
         '(usage at the top of prisma/create-organization.ts).\n'
     )
     process.exit(1)
   }
 
-  // Normalised the same way org:create stored it, so "5591234567" finds
-  // the organization saved as "559123-4567".
+  // Normalised the same way org:create stored it, so "5591234561" finds
+  // the organization saved as "559123-4561".
   const orgNumber = orgNumberSchema.parse(rawOrgNumber)
   const organization = await findOrganizationByOrgNumber(orgNumber)
   if (!organization) {
-    console.error(`No organization with organisationsnummer ${orgNumber}. Run bun run org:create first.`)
+    // The number is not echoed — it can be a personnummer (ADR 56).
+    console.error('No organization with that organisationsnummer. Run bun run org:create first.')
     process.exit(1)
   }
 
@@ -67,7 +69,15 @@ async function main() {
       console.error(`${email} already belongs to another organization. Use a different email.`)
       process.exit(1)
     }
-    console.log(`Admin ${email} already exists (${existing.role}). Nothing to do.`)
+    // Same org but a CLIENT: "nothing to do" would again leave the operator
+    // thinking an admin exists. And the seed never PROMOTES anyone — turning
+    // a customer's login into an admin is a privilege escalation, and must
+    // never happen as a side effect of re-running a setup script.
+    if (existing.role !== 'ADMIN') {
+      console.error(`${email} already exists as ${existing.role}, not ADMIN. Nothing was changed.`)
+      process.exit(1)
+    }
+    console.log(`Admin ${email} already exists in ${organization.name}. Nothing to do.`)
     return
   }
 
@@ -83,7 +93,19 @@ async function main() {
     select: { id: true, email: true, role: true }
   })
 
-  console.log(`Created ${admin.role}: ${admin.email} (${admin.id}) in ${organization.name}`)
+  // Every ADMIN that exists was made here, so this row is the complete answer
+  // to "where did this admin come from?". userId is null: no user of the
+  // system did it, an operator with server access did. resourceId is the new
+  // admin; the email is left out, since the id already identifies them.
+  await record({
+    action: AuditAction.ADMIN_CREATED,
+    resource: AuditResource.USER,
+    userId: null,
+    resourceId: admin.id
+  })
+
+  console.log(`Created ${admin.role}: ${admin.email} (${admin.id})`)
+  console.log(`  in ${organization.name} (${organization.id})`)
   console.log('The password was not stored anywhere in plain text.')
 }
 

@@ -87,9 +87,9 @@ const envSchema = z.object({
   // produce a complete, legal-looking document without any setup.
   COMPANY_NAME: z.string().min(1).default('Fakturly Demo AB'),
   COMPANY_ADDRESS: z.string().min(1).default('Sveavägen 1, 111 57 Stockholm'),
-  COMPANY_ORG_NUMBER: z.string().min(1).default('559123-4567'),
+  COMPANY_ORG_NUMBER: z.string().min(1).default('559123-4561'),
   // Swedish VAT numbers are SE + the ten organisation-number digits + 01.
-  COMPANY_VAT_NUMBER: z.string().min(1).default('SE559123456701'),
+  COMPANY_VAT_NUMBER: z.string().min(1).default('SE559123456101'),
   COMPANY_EMAIL: z.string().min(1).default('faktura@fakturly.se'),
   COMPANY_BANKGIRO: z.string().min(1).default('123-4567'),
 

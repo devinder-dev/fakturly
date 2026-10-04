@@ -66,8 +66,8 @@ export const DEMO_ACCOUNTS = {
  */
 const DEMO_ORGANIZATION = {
   name: 'Fakturly Demo AB',
-  orgNumber: '559123-4567',
-  vatNumber: 'SE559123456701',
+  orgNumber: '559123-4561',
+  vatNumber: 'SE559123456101',
   address: 'Sveavägen 1, 111 57 Stockholm',
   email: 'faktura@fakturly.se',
   bankgiro: '123-4567'
