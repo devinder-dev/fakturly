@@ -1084,6 +1084,16 @@ wrong CA.
 **Trade-off:** Supabase pauses a free project after about a week without
 database activity. The daily cron jobs are that activity; `/health` is not.
 
+**Amended 2026-10-05 — that assumption failed.** The project was paused, and
+the API crash-looped on `migrate deploy`. The cron jobs are `node-cron` inside
+the API process, so they only run while Render's instance is awake at
+02:00/03:00 — a dependency this ADR did not name. A scheduled GitHub Actions
+workflow (`keep-database-awake.yml`) now calls `/health/ready` once a day.
+That is one `SELECT 1`, from a scheduler that is independent of Render; on
+Supabase's free plan, where the database runs 24/7 regardless, it costs
+nothing. It does not contradict ADR 51 — that was about a query every few
+seconds against an hourly compute quota.
+
 ---
 
 ## 54. Supabase's Data API is locked out: RLS everywhere, no grants to anon
