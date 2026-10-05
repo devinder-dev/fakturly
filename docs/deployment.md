@@ -43,8 +43,14 @@ committed at `backend/certs/supabase-prod-ca-2021.crt`, SHA-256
 
 > **Free-tier caveat:** Supabase pauses a free project after about a week
 > with no database activity. The daily cron jobs (overdue check, demo reset)
-> query it every day, which counts. If it is ever paused: dashboard →
-> project → **Restore**. Data is kept.
+> were supposed to be that activity, but they run inside the API process and
+> fire only if Render is awake at 02:00 — and on 2026-10-05 the project
+> paused anyway. The API then crash-loops, because the entrypoint's
+> `migrate deploy` cannot reach the database. The guarantee is now
+> `.github/workflows/keep-database-awake.yml`: one `/health/ready` request a
+> day from GitHub's scheduler, independent of Render and the uptime pinger.
+> If it is ever paused regardless: dashboard → project → **Restore**. Data is
+> kept, and Render recovers on its own once the database answers.
 >
 > **Neon still works** — set `DATABASE_URL` with its `?sslmode=require` and
 > *remove* `DATABASE_CA_CERT`; Neon's certificate is publicly trusted.
@@ -101,6 +107,8 @@ committed at `backend/certs/supabase-prod-ca-2021.crt`, SHA-256
 > keeps the compute awake 24/7. That is exactly how the live demo went down on
 > 2026-09-23: Neon paused the project for the rest of the month. `/health`
 > touches nothing but the process, so Render stays awake and Neon still sleeps.
+> The keep-awake workflow is the one exception: it calls `/health/ready` once
+> a *day*, because there a database query is the whole point.
 
 ## 3. Frontend — Vercel
 

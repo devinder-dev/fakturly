@@ -1,0 +1,50 @@
+# keep-database-awake.yml — one real database query per day, so Supabase's
+# free plan never pauses the project.
+#
+# Supabase pauses a free project after about a week without database activity
+# (2026-10-05: it did, and the API crash-looped because `migrate deploy` in the
+# entrypoint could not reach the database). The nightly cron jobs were meant
+# to be that activity, but they run inside the API process — they only fire
+# if Render happens to be awake at 02:00. This runs on GitHub's schedule
+# instead, so it depends on neither Render nor the uptime pinger.
+#
+# Once a day is deliberate. Supabase's free database runs 24/7 whether it is
+# queried or not, so one SELECT 1 a day costs nothing. What took Neon down
+# (ADR 51) was a query every few seconds against an hourly compute quota.
+
+name: Keep database awake
+
+on:
+  schedule:
+    # 07:23 UTC. Off the hour on purpose: GitHub delays, and under load drops,
+    # scheduled runs queued at :00. One missed day is harmless — the pause
+    # needs seven in a row.
+    - cron: '23 7 * * *'
+  # Lets a run be started by hand to verify the setup.
+  workflow_dispatch:
+
+# The job only makes an outbound HTTPS request. No checkout, no third-party
+# actions, no token — nothing to leak and nothing to hijack.
+permissions: {}
+
+jobs:
+  ping:
+    name: Query the database through /health/ready
+    runs-on: ubuntu-latest
+    # Worst case: 4 attempts x 90 s + 3 x 20 s pauses = 7 minutes.
+    timeout-minutes: 10
+    steps:
+      # /health/ready runs SELECT 1 and pings Redis (app.ts), and answers 503
+      # when either fails. /health would NOT work here: it never touches the
+      # database, which is exactly why it is the one the pinger uses.
+      #
+      # --max-time 90: a sleeping Render instance takes about a minute to
+      #   start, and Render holds the request until it is up.
+      # --retry-all-errors: retry a 503 or a timeout, not only network errors.
+      # --fail: a 503 must fail the job. GitHub emails a failed scheduled run
+      #   to whoever last edited the cron line, so this is an early warning too.
+      - run: >-
+          curl --fail --silent --show-error
+          --max-time 90
+          --retry 3 --retry-delay 20 --retry-all-errors
+          https://fakturly-api.onrender.com/health/ready
