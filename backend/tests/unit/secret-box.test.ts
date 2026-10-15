@@ -85,6 +85,21 @@ describe('AAD — binds a value to its row', () => {
     expect(() => boxV1.open(sealed, new Uint8Array())).toThrow('aad must not be empty')
   })
 
+  test('🔑 a lone surrogate is refused — it would encode to the same bytes as U+FFFD', () => {
+    // Buffer.from('\uD800') and Buffer.from('�') are both EF BF BD.
+    // Without the check, these three different AADs would open each
+    // other's values.
+    const sealed = boxV1.seal('hemlig', 'user:�')
+    expect(() => boxV1.open(sealed, 'user:\uD800')).toThrow('lone surrogate')
+    expect(() => boxV1.open(sealed, 'user:\uDC00')).toThrow('lone surrogate')
+    expect(() => boxV1.seal('hemlig', 'user:\uD800')).toThrow('lone surrogate')
+    expect(() => boxV1.seal('half an emoji: \uD83D', AAD)).toThrow('lone surrogate')
+  })
+
+  test('a full surrogate pair (an emoji) is fine', () => {
+    expect(boxV1.openText(boxV1.seal('kvitto 🧾', 'user:🧾'), 'user:🧾')).toBe('kvitto 🧾')
+  })
+
   test('string and byte AAD are the same thing', () => {
     const sealed = boxV1.seal('hemlig', AAD)
     expect(boxV1.openText(sealed, Buffer.from(AAD))).toBe('hemlig')
@@ -171,6 +186,15 @@ describe('malformed input', () => {
     [`${keyId}:${iv}:${ciphertext}:${tag}AA`, 'tag too long']
   ])('%p (%s) → MALFORMED', (input) => {
     expect(errorCode(() => boxV1.open(input, AAD))).toBe('MALFORMED')
+  })
+
+  test.each([11, 13])('a canonical %p-byte IV → MALFORMED (the length check itself)', (length) => {
+    // These decode and re-encode cleanly, so only `iv.length !== 12` can
+    // reject them. GCM itself accepts IVs of any length, so without the
+    // check they would reach the decipher and fail as AUTH_FAILED instead.
+    const wrongIv = Buffer.alloc(length, 7).toString('base64url')
+    expect(Buffer.from(wrongIv, 'base64url').toString('base64url')).toBe(wrongIv)
+    expect(errorCode(() => boxV1.open(`${keyId}:${wrongIv}:${ciphertext}:${tag}`, AAD))).toBe('MALFORMED')
   })
 
   test('needsReseal refuses malformed input too', () => {

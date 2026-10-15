@@ -230,7 +230,17 @@ function encode(bytes: Uint8Array): string {
 }
 
 function toBytes(value: string | Uint8Array): Buffer {
-  return typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value)
+  if (typeof value !== 'string') return Buffer.from(value)
+  const bytes = Buffer.from(value, 'utf8')
+  // TRAP: a lone UTF-16 surrogate ('\uD800') has no UTF-8 form, and
+  // Buffer.from silently writes U+FFFD instead — so 'user:\uD800',
+  // 'user:\uDC00' and 'user:�' all become the SAME bytes, and three
+  // different AAD contexts would be one. Refuse anything that does not
+  // round-trip. A programming error, so a plain Error; the value is not echoed.
+  if (bytes.toString('utf8') !== value) {
+    throw new Error('secretBox: string is not valid Unicode (lone surrogate) and cannot be encoded exactly')
+  }
+  return bytes
 }
 
 function requireAad(aad: string | Uint8Array): Buffer {
