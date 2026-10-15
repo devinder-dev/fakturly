@@ -15,7 +15,7 @@ Decided 2026-10-04. Status updated 2026-10-15.
 |---|---|
 | 0 | Done — in review |
 | 1 A — Multi-tenancy | In progress: phases 1–2 of 6 done (organizations; scoped writes and single-row reads) |
-| 1 B — Standalone libraries | In progress: phases 1–2 of 4 done (personnummer + reverse OCR; TOTP + encrypted secrets) |
+| 1 B — Standalone libraries | In progress: phases 1–3 of 4 done (personnummer + reverse OCR; TOTP + encrypted secrets; BgMax parser, tested against Bankgirot's own example files) |
 | 2–5 | Not started |
 
 Every phase so far has also had an independent code review; its findings are
