@@ -7,7 +7,19 @@ payments, SIE export, an append-only ledger and an audit log.
 This roadmap adds what a real Swedish invoicing product needs next, in an
 order chosen so every feature is built on the right foundation the first time.
 
-Decided 2026-10-04.
+Decided 2026-10-04. Status updated 2026-10-15.
+
+## Status
+
+| Wave | Status |
+|---|---|
+| 0 | Done — in review |
+| 1 A — Multi-tenancy | In progress: phases 1–2 of 6 done (organizations; scoped writes and single-row reads) |
+| 1 B — Standalone libraries | In progress: phases 1–2 of 4 done (personnummer + reverse OCR; TOTP + encrypted secrets) |
+| 2–5 | Not started |
+
+Every phase so far has also had an independent code review; its findings are
+fixed in a separate commit before the next phase starts.
 
 ---
 
@@ -30,6 +42,9 @@ Decided 2026-10-04.
 | When does multi-tenancy happen? | First, as the foundation |
 | How many streams at once? | Two |
 | BankID scope | Login for clients and admins; an admin links a personnummer to an existing user. Signing is out of scope |
+| A customer who buys from several companies | **One login, one customer record per company.** Staff belong to exactly one company. Adding a customer answers the same whether the address is new or already known, so one company can't probe another's customers |
+| Draft invoices | Hidden from the customer portal — a draft hasn't been issued |
+| Samordningsnummer without a real date | Accepted — Skatteverket issues them, and rejecting them would lock real people out of BankID |
 | AI | Last wave, once the whole domain is in place |
 
 ---
@@ -71,6 +86,9 @@ and the real worker on both ends.
   named `…Unscoped` so they are easy to audit.
 - One invoice-number series **per organization** — bokföringslagen wants an
   unbroken series per business.
+- Staff belong to one organization; a customer has one login and a customer
+  record per seller, and sees every seller's invoices in one portal. A database
+  constraint enforces the difference.
 - Seller details are **copied onto an invoice when it is sent**, so editing the
   company address never changes an invoice that was already issued.
 - A cross-tenant test suite: an admin of company B gets the same 404 for company
