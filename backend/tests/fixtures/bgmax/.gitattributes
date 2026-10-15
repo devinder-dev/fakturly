@@ -1,0 +1,4 @@
+# Bankgirot's official BgMax example files, kept byte-for-byte: CRLF line
+# endings, Latin-1 bytes, and a tab in ocr-kontroll-langd.txt. Never let git
+# normalise them — tests/unit/bgmax.test.ts checks their SHA-256.
+*.txt -text
