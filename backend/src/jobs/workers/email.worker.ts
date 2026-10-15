@@ -8,7 +8,7 @@ import { Worker, type Job } from 'bullmq'
 import { prisma } from '../../lib/prisma.ts'
 import { totalDueOre } from '../../lib/money.ts'
 import { sendOverdueNoticeEmail, sendReminderEmail } from '../../services/email.service.ts'
-import { QueueName, bullConnection, type EmailJobData } from '../queues.ts'
+import { QueueName, QUEUE_PREFIX, bullConnection, type EmailJobData } from '../queues.ts'
 
 export async function processEmailJob(job: Job<EmailJobData>) {
   const invoice = await prisma.invoice.findUnique({
@@ -73,6 +73,10 @@ export async function processEmailJob(job: Job<EmailJobData>) {
 export function startEmailWorker(): Worker<EmailJobData> {
   const worker = new Worker<EmailJobData>(QueueName.EMAIL, processEmailJob, {
     connection: bullConnection,
+    // MUST match the queue's prefix. Without it BullMQ falls back to 'bull'
+    // and the worker silently watches keys nothing writes to — which is how
+    // overdue notices and reminders went unsent until 2026-10-04.
+    prefix: QUEUE_PREFIX,
     // Higher than the overdue worker: sending is IO-bound and independent per
     // invoice, so several at once is fine. Still bounded, because a provider
     // will rate-limit us long before our own machine struggles.
