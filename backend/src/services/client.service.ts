@@ -39,8 +39,9 @@ export type CreatedClient = {
  * ONE LOGIN, ONE RECORD PER SELLER (ADR 56). If the email has no login yet, one
  * is created and the person gets an invite to set a password. If it already
  * has one — they buy from another seller too — that login gets a customer
- * record here as well, and an email saying so. Either way the admin sees the
- * SAME 201 with the same fields.
+ * record here as well, and an email saying so; or, if its owner never set a
+ * password, a fresh invite. Either way the admin sees the SAME 201 with the
+ * same fields.
  *
  * That sameness is the security property. A response that differed — a 409
  * "email taken", or even the login's id, whose cuid starts with a timestamp
@@ -99,7 +100,11 @@ export async function createClient(
   // sending fails, the client is still created and the email can be resent;
   // rolling back a customer because a mail server was briefly down would be
   // absurd. The email functions never throw, and log the attempt either way.
-  if (created.login === 'created') {
+  if (created.login === 'created' || created.login === 'existing-pending') {
+    // A pending login gets an invite exactly like a new one. Its earlier
+    // invite may have expired, and "log in as usual" would strand someone
+    // who never chose a password. issuePasswordToken invalidates any
+    // earlier link first, so only the newest one works.
     const invite = await issuePasswordToken(created.userId, 'INVITE')
 
     await sendInviteEmail({

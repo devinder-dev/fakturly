@@ -149,7 +149,9 @@ export async function createTestUser(
       email,
       password: await testPasswordHash(),
       role,
-      organizationId: role === 'ADMIN' ? organizationId : null
+      organizationId: role === 'ADMIN' ? organizationId : null,
+      // A known password the test logs in with: an activated login.
+      passwordSetAt: new Date()
     },
     select: { id: true, email: true, role: true }
   })

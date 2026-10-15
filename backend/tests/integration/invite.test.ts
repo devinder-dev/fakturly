@@ -115,6 +115,20 @@ describe('provisioning issues an invite', () => {
 })
 
 describe('redeeming the invite', () => {
+  test('activates the login: passwordSetAt goes from null to now', async () => {
+    // Provisioned, never redeemed: pending. Whether a second seller's
+    // addition sends an invite or "log in as usual" depends on this (ADR 56).
+    await prisma.user.update({ where: { id: inviteeUserId }, data: { passwordSetAt: null } })
+    const { token } = await issuePasswordToken(inviteeUserId, 'INVITE')
+
+    const before = Date.now()
+    expect((await setPassword(token, NEW_PASSWORD)).statusCode).toBe(204)
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: inviteeUserId } })
+    expect(user.passwordSetAt).not.toBeNull()
+    expect(user.passwordSetAt!.getTime()).toBeGreaterThanOrEqual(before - 1000)
+  })
+
   test('a valid token sets the password', async () => {
     const { token } = await issuePasswordToken(inviteeUserId, 'INVITE')
     await clearRateLimits()

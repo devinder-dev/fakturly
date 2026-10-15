@@ -121,7 +121,9 @@ export async function redeemPasswordToken(
     throw new UnauthenticatedError('Länken är ogiltig eller har gått ut')
   }
 
-  await userRepository.updatePasswordHash(stored.userId, await hashPassword(newPassword))
+  // setChosenPassword, not updatePasswordHash: this is the owner choosing a
+  // password, which is what activates a provisioned login (passwordSetAt).
+  await userRepository.setChosenPassword(stored.userId, await hashPassword(newPassword))
 
   // Any sibling tokens die with it.
   await passwordTokenRepository.invalidateAllForUser(stored.userId)

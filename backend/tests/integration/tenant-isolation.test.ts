@@ -25,6 +25,9 @@ import {
   prisma
 } from '../helpers.ts'
 import { peekLastNumber } from '../../src/repositories/invoiceNumber.repository.ts'
+import { setChosenPassword } from '../../src/repositories/user.repository.ts'
+import * as invoiceRepository from '../../src/repositories/invoice.repository.ts'
+import * as clientRepository from '../../src/repositories/client.repository.ts'
 import { VatRate, stockholmYear } from '../../src/lib/money.ts'
 
 const suffix = uniqueSuffix()
@@ -166,6 +169,124 @@ describe('🏢 admin B on admin A\'s ids', () => {
 })
 
 // ─────────────────────────────────────────────────────────────
+// Each write, on its own
+// ─────────────────────────────────────────────────────────────
+//
+// The routes above load an invoice through a scoped read BEFORE writing, so
+// they mostly prove the read. These call every write directly with the
+// wrong organization: each must refuse by itself, so that a future caller
+// that skips the read — a job, a script, a new route — is still safe.
+
+describe('🏢 every scoped write refuses the wrong organization by itself', () => {
+  const now = () => new Date()
+  const WRITES: Array<[string, () => Promise<unknown>, unknown]> = [
+    ['markSent', () => invoiceRepository.markSent(orgB, draftOfA), null],
+    ['deleteDraftInvoice', () => invoiceRepository.deleteDraftInvoice(orgB, draftOfA), false],
+    ['chargeReminderFee', () => invoiceRepository.chargeReminderFee(orgB, sentOfA, 6_000, now()), null],
+    ['markReminderSent', () => invoiceRepository.markReminderSent(orgB, sentOfA, now()), false],
+    ['attachCheckoutSession', () => invoiceRepository.attachCheckoutSession(orgB, sentOfA, 'cs_kapad'), false],
+    [
+      'markPaid',
+      () => invoiceRepository.markPaid(orgB, sentOfA, { stripePaymentId: 'pi_kapad', amountOre: 1 }),
+      null
+    ],
+    [
+      'createCreditNote',
+      () =>
+        invoiceRepository.createCreditNote(orgB, {
+          originalId: sentOfA,
+          creditNoteNumber: '2026-9999',
+          clientId: customerOfA.id,
+          currency: 'SEK',
+          issuedAt: now(),
+          netTotalOre: -1,
+          vatTotalOre: 0,
+          grossTotalOre: -1,
+          items: []
+        }),
+      null
+    ],
+    ['updateClient', () => clientRepository.updateClient(orgB, customerOfA.id, { name: 'Kapad AB' }), null]
+  ]
+
+  for (const [name, write, refused] of WRITES) {
+    test(`${name}(B, A's id) → ${String(refused)}, and nothing of A's changes`, async () => {
+      const before = await snapshotOfA()
+
+      expect(await write()).toBe(refused)
+      expect(await snapshotOfA()).toEqual(before)
+    })
+  }
+})
+
+// ─────────────────────────────────────────────────────────────
+// Positive controls: A's own admin, on fresh rows of A's
+// ─────────────────────────────────────────────────────────────
+
+describe('…while A\'s own admin can do every one of those writes', () => {
+  // Fresh rows per route: each write changes state, and the B-side tests
+  // above must keep finding A's rows exactly as they were.
+  const CONTROLS: Array<[string, 'PATCH' | 'POST' | 'DELETE', () => Promise<string>, number, unknown?]> = [
+    ['PATCH /clients/{id}', 'PATCH', async () => customerOfA.id, 200, { phone: '070-0000000' }],
+    ['POST /invoices/{id}/send', 'POST', () => createInvoice(tokenA, customerOfA.id, false), 200],
+    ['POST /invoices/{id}/payment-link', 'POST', () => createInvoice(tokenA, customerOfA.id, true), 201],
+    ['POST /invoices/{id}/credit-note', 'POST', () => createInvoice(tokenA, customerOfA.id, true), 201],
+    ['POST /invoices/{id}/reminder', 'POST', () => createInvoice(tokenA, customerOfA.id, true), 200],
+    ['DELETE /invoices/{id}', 'DELETE', () => createInvoice(tokenA, customerOfA.id, false), 204]
+  ]
+
+  for (const [label, method, make, status, payload] of CONTROLS) {
+    test(`${label} → ${status}`, async () => {
+      const id = await make()
+      const path = label.split(' ')[1]!.replace('{id}', id)
+
+      expect((await as(tokenA)(method, path, payload)).statusCode).toBe(status)
+    })
+  }
+})
+
+// ─────────────────────────────────────────────────────────────
+// A customer of A alone
+// ─────────────────────────────────────────────────────────────
+
+describe('🏢 a customer of A alone, on B\'s ids', () => {
+  let onlyAToken: string
+  let clientOfB: string
+  let invoiceOfB: string
+
+  beforeAll(async () => {
+    const email = `iso-endast-a-${suffix}@kund.example.se`
+    const record = await withUserId(
+      (await as(tokenA)('POST', '/clients', { email, name: 'Bara Alfas kund' })).json().client
+    )
+    await setChosenPassword(record.userId, await testPasswordHash())
+    onlyAToken = (await loginAs(app, email, '198.51.100.203')).accessToken
+
+    clientOfB = (await as(tokenB)('POST', '/clients', {
+      email: `iso-b-kund-${suffix}@kund.example.se`,
+      name: 'Betas kund'
+    })).json().client.id
+    invoiceOfB = await createInvoice(tokenB, clientOfB, true)
+  })
+
+  const READS: Array<[string, () => string]> = [
+    ['/clients/{id}', () => clientOfB],
+    ['/invoices/{id}', () => invoiceOfB],
+    ['/invoices/{id}/pdf', () => invoiceOfB]
+  ]
+
+  for (const [path, id] of READS) {
+    test(`GET ${path} — 404, identical to an id that never existed`, async () => {
+      const theirs = await as(onlyAToken)('GET', path.replace('{id}', id()))
+      const nobodys = await as(onlyAToken)('GET', path.replace('{id}', NEVER_EXISTED))
+
+      expect(theirs.statusCode).toBe(404)
+      expect(comparable(theirs)).toEqual(comparable(nobodys))
+    })
+  }
+})
+
+// ─────────────────────────────────────────────────────────────
 // Lists and creation
 // ─────────────────────────────────────────────────────────────
 
@@ -230,6 +351,8 @@ describe('🏢 a customer who buys from both A and B', () => {
   let customerToken: string
 
   test('B adding A\'s customer looks exactly like adding a brand-new one', async () => {
+    // The customer accepted A's invite: the same call redemption makes.
+    await setChosenPassword(customerOfA.userId, await testPasswordHash())
     const before = await snapshotOfA()
 
     const fresh = await as(tokenB)('POST', '/clients', {
@@ -262,19 +385,16 @@ describe('🏢 a customer who buys from both A and B', () => {
       where: { userId: customerOfA.userId },
       select: { type: true }
     })
-    // INVITE from A (the first provisioning); CUSTOMER_ADDED from B. A second
-    // invite would let B's admin trigger a password change on a login B does
-    // not own.
+    // INVITE from A (the first provisioning); CUSTOMER_ADDED from B — the
+    // login is active. A second invite here would let any seller push "set
+    // a new password" links at someone else's customer, and void a reset
+    // link the customer asked for themselves.
     expect(emails.map((e) => e.type).sort()).toEqual(['CUSTOMER_ADDED', 'INVITE'])
   })
 
   test('the portal shows both sellers\' invoices, each naming its seller', async () => {
     invoiceFromB = await createInvoice(tokenB, customerOfB, true)
 
-    await prisma.user.update({
-      where: { id: customerOfA.userId },
-      data: { password: await testPasswordHash() }
-    })
     customerToken = (await loginAs(app, CUSTOMER, '198.51.100.202')).accessToken
 
     const res = await as(customerToken)('GET', '/invoices?limit=100')
@@ -347,12 +467,59 @@ describe('🏢 a customer who buys from both A and B', () => {
     }
 
     const brandNew = await trailOf(`iso-spar-${suffix}@kund.example.se`)
-    // Another seller's customer: give A a fresh one for this.
-    const elsewhere = `iso-spar-a-${suffix}@kund.example.se`
-    await as(tokenA)('POST', '/clients', { email: elsewhere, name: 'Alfas kund' })
-    const existingCustomer = await trailOf(elsewhere)
 
-    expect(existingCustomer).toEqual(brandNew)
+    // Another seller's customer who never accepted their invite (pending)…
+    const pending = `iso-spar-a-${suffix}@kund.example.se`
+    await as(tokenA)('POST', '/clients', { email: pending, name: 'Alfas kund' })
+    const pendingTrail = await trailOf(pending)
+
+    // …and one who did (active).
+    const active = `iso-spar-aktiv-${suffix}@kund.example.se`
+    const activeRecord = await withUserId(
+      (await as(tokenA)('POST', '/clients', { email: active, name: 'Alfas aktiva kund' })).json().client
+    )
+    await setChosenPassword(activeRecord.userId, await testPasswordHash())
+    const activeTrail = await trailOf(active)
+
+    expect(pendingTrail).toEqual(brandNew)
+    expect(activeTrail).toEqual(brandNew)
     expect(brandNew).toEqual(['CLIENT_CREATED'])
+  })
+})
+
+describe('🏢 a customer who never accepted the first seller\'s invite', () => {
+  test('an expired invite, then a second seller adds them: a fresh invite, not "log in as usual"', async () => {
+    const PENDING = `iso-vantar-${suffix}@kund.example.se`
+    const first = await as(tokenA)('POST', '/clients', { email: PENDING, name: 'Väntande hos Alfa' })
+    const login = await withUserId(first.json().client)
+
+    // A's invite goes unanswered until it expires.
+    await prisma.passwordToken.updateMany({
+      where: { userId: login.userId },
+      data: { expiresAt: new Date(Date.now() - 60_000) }
+    })
+    const earlier = (await prisma.passwordToken.findMany({ where: { userId: login.userId } })).map((t) => t.id)
+
+    const second = await as(tokenB)('POST', '/clients', { email: PENDING, name: 'Väntande hos Beta' })
+
+    // The admin sees the same 201 as always…
+    expect(second.statusCode).toBe(201)
+    expect(Object.keys(second.json().client).sort()).toEqual(['email', 'id', 'name'])
+
+    // …the person gets a new, working invite — exactly one, since issuing it
+    // voided every earlier link…
+    const working = await prisma.passwordToken.findMany({
+      where: { userId: login.userId, type: 'INVITE', usedAt: null, expiresAt: { gt: new Date() } }
+    })
+    expect(working).toHaveLength(1)
+    expect(earlier).not.toContain(working[0]!.id)
+
+    // …and no "log in with your usual password": they never chose one.
+    const emails = await prisma.emailLog.findMany({ where: { userId: login.userId }, select: { type: true } })
+    expect(emails.map((e) => e.type)).toEqual(['INVITE', 'INVITE'])
+
+    // Still pending until they redeem it.
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: login.userId } })
+    expect(user.passwordSetAt).toBeNull()
   })
 })

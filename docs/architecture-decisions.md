@@ -1349,18 +1349,50 @@ cross-tenant test suite with a coverage guard (later).
   - *Timing.* The staff branch sent no email and answered 100–300 ms faster.
     Now every branch sends exactly one email; a staff address gets the
     customer-added email without a portal link. What remains is the invite's
-    token write (milliseconds against an email's hundreds). Moving all three
-    sends onto the BullMQ queue would close it completely, at the cost of
-    asynchronous invites. Recorded, not done.
+    token write (milliseconds against an email's hundreds). **Deferred:**
+    moving every provisioning email (the invite, the customer-added email
+    with and without its portal link) onto the BullMQ queue would close the
+    gap completely. The request would then do identical work in every case,
+    at the cost of invites becoming asynchronous.
   - *Cascades into append-only rows.* Every foreign key to `Organization` is
     now `ON UPDATE RESTRICT`, not Prisma's default `CASCADE`. An
     organization's id never changes, and if it ever did, it must not
     silently rewrite ledger or audit rows.
-- **Known, older than this branch, left open:** the nightly demo wipe
-  deletes every organization's data (a real tenant must never live on a
-  `DEMO_MODE` deployment; a guard is planned with the two-organization demo
-  in phase 6). Customers can see their DRAFT invoices; that was true before
-  multi-tenancy, and whether to hide them is the owner's call.
+- **Phase 2 review:**
+  - *A login that never chose a password is not "existing" in the sense
+    that matters.* A second seller adding a customer whose first invite went
+    unanswered (or expired) used to send "log in with your usual password"
+    to someone who never had one. Now `User.passwordSetAt` records when the
+    owner chose a password: set on redeeming an invite or reset (not by the
+    silent rehash at login), set by the seed for admins and the demo's known
+    customer, and backfilled once. A pending login gets a fresh invite
+    instead; issuing it voids every earlier link. The backfill reads the
+    **audit log** (`PASSWORD_SET`/`PASSWORD_RESET`, else the first
+    `LOGIN_SUCCESS`), not used `PasswordToken` rows. Issuing any new token
+    marks the outstanding ones used *without* redeeming them, so a
+    re-invited or reset-requesting customer who never chose a password
+    would have looked activated. Rehearsed on a scratch database, one user
+    per case.
+  - *Audit backfill, staff only.* The `tenant_scoped_data` backfill files a
+    row under an organization through its acting user only when that user is
+    staff. A customer's own events belong to no organization, exactly as
+    they are written at runtime.
+  - *Every write refuses on its own.* The routes load an invoice through a
+    scoped read before writing, so route tests mostly prove the read. Each
+    scoped write is now also called directly with the wrong organization and
+    must match nothing and change nothing. Removing the organization from
+    `markSent` or `chargeReminderFee` fails those tests.
+- **A rule for phase 3's audit view:** it must filter on `organizationId`
+  and nothing else — never "rows whose user is one of my staff". An invite's
+  row is filed under no organization but carries the inviting admin's
+  `userId`. Selecting by staff would show it for a brand-new address and not
+  for an existing one, which is exactly the oracle the identical 201 closes.
+- **Known, older than this branch:** the nightly demo wipe deletes every
+  organization's data (a real tenant must never live on a `DEMO_MODE`
+  deployment; a guard is planned with the two-organization demo in phase 6).
+  Customers could see their seller's DRAFT invoices; **decided: hidden from
+  the customer portal in phase 3**. A draft was never issued, so it is not
+  yet an invoice to anyone but its seller.
 
 **Not safe to deploy on its own:** after phase 2, aggregates are still
 unscoped: the dashboard, the aging, VAT and SIE reports, and the audit-log

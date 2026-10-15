@@ -219,7 +219,8 @@ export async function resetDemoData(now: Date = new Date()): Promise<DemoSummary
       email: DEMO_ACCOUNTS.admin.email,
       password: await hashPassword(DEMO_ACCOUNTS.admin.password),
       role: 'ADMIN',
-      organizationId: organization.id
+      organizationId: organization.id,
+      passwordSetAt: now
     },
     select: { id: true }
   })
@@ -237,6 +238,12 @@ export async function resetDemoData(now: Date = new Date()): Promise<DemoSummary
       phone: client.phone,
       address: client.address
     })
+    // The showcase customer has a known password, published on the landing
+    // page: an activated login. The scenery customers keep a random one
+    // nobody knows — pending, exactly like a real unanswered invite.
+    if (client.password) {
+      await prisma.user.update({ where: { id: created.userId }, data: { passwordSetAt: now } })
+    }
     clientIds.push(created.clientId)
   }
 

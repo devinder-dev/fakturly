@@ -56,10 +56,22 @@ export async function findOrganizationIdOfUser(id: string): Promise<string | nul
 }
 
 /**
- * Replaces a user's password hash.
+ * Stores a password the user CHOSE — redeeming an invite or a reset link —
+ * and records when. The first such moment activates a provisioned login.
+ */
+export async function setChosenPassword(userId: string, passwordHash: string): Promise<void> {
+  await prisma.user.update({
+    where: { id: userId },
+    data: { password: passwordHash, passwordSetAt: new Date() }
+  })
+}
+
+/**
+ * Replaces a user's password hash, leaving passwordSetAt alone.
  *
- * Used both when someone sets a new password and when we silently upgrade an
- * old hash to stronger Argon2id parameters after a successful login.
+ * For the silent upgrade of an old hash to stronger Argon2id parameters
+ * after a successful login: the same password, a better hash — not a new
+ * choice, so not an activation.
  */
 export async function updatePasswordHash(
   userId: string,

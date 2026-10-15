@@ -61,20 +61,22 @@ async function main() {
 
   const existing = await prisma.user.findUnique({ where: { email } })
   if (existing) {
+    // Role FIRST. A customer login has no organization at all (ADR 56), so
+    // comparing organizations first would report "another organization" for
+    // what is really a customer — the wrong reason. And "nothing to do" would
+    // leave the operator thinking an admin exists. The seed never PROMOTES
+    // anyone: turning a customer's login into an admin is a privilege
+    // escalation, and must never happen as a side effect of a setup script.
+    if (existing.role !== 'ADMIN') {
+      console.error(`${email} already exists as ${existing.role}, not ADMIN. Nothing was changed.`)
+      process.exit(1)
+    }
     // Re-running for the same org is harmless. For a DIFFERENT org it is not:
     // emails are unique across all organizations, so "nothing to do" would
     // leave the operator believing the new tenant has its admin when it
     // has none.
     if (existing.organizationId !== organization.id) {
       console.error(`${email} already belongs to another organization. Use a different email.`)
-      process.exit(1)
-    }
-    // Same org but a CLIENT: "nothing to do" would again leave the operator
-    // thinking an admin exists. And the seed never PROMOTES anyone — turning
-    // a customer's login into an admin is a privilege escalation, and must
-    // never happen as a side effect of re-running a setup script.
-    if (existing.role !== 'ADMIN') {
-      console.error(`${email} already exists as ${existing.role}, not ADMIN. Nothing was changed.`)
       process.exit(1)
     }
     console.log(`Admin ${email} already exists in ${organization.name}. Nothing to do.`)
@@ -88,7 +90,9 @@ async function main() {
       // The ONLY place in the codebase where role is set to ADMIN. Nothing
       // reachable over HTTP can produce one.
       role: 'ADMIN',
-      organizationId: organization.id
+      organizationId: organization.id,
+      // The operator chose this password: the login is active from the start.
+      passwordSetAt: new Date()
     },
     select: { id: true, email: true, role: true }
   })

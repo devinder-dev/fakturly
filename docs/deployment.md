@@ -104,9 +104,10 @@ committed at `backend/certs/supabase-prod-ca-2021.crt`, SHA-256
 
 ### Deploying multi-tenancy (ADR 56)
 
-The release carries two migrations, applied on boot in order:
-`20261004091156_organizations` and `20261004135825_tenant_scoped_data`.
-**The previous release cannot write to the result.** The container runs
+The release carries three migrations, applied on boot in order:
+`20261004091156_organizations`, `20261004135825_tenant_scoped_data` and
+`20261015092148_password_set_at`. **The previous release cannot write to the
+result.** The container runs
 `prisma migrate deploy` before the new code serves, and Render keeps the old
 instance running until the new one is healthy. Old code meets the new schema
 during a rolling deploy, after a failed boot (the new code fails after
@@ -130,8 +131,9 @@ What the old release breaks while it still serves:
 | Nightly demo reset | Wipes everything, then fails to create the admin: the demo is **empty**. Run `bun run seed:demo` once the new release is up |
 
 **Rolling back** means restoring the backup and deploying the previous
-release. Anything written after the backup is lost. After the second
-migration, SQL alone is not enough: customer logins have left their
+release. Anything written after the backup is lost. Once the second
+migration has run, SQL alone is not enough (whether or not the third one
+did): customer logins have left their
 organization, the number series changed its key, and four tables gained
 required columns.
 

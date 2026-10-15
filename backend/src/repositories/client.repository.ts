@@ -28,14 +28,18 @@ export type ProvisionedClient = {
   organizationName: string
   /**
    * What happened to the LOGIN, which decides the email the person gets:
-   *   'created'        — a brand-new login: send an invite to set a password
-   *   'existing-client' — already a customer elsewhere: tell them this seller
-   *                       added them; their password is unchanged
-   *   'existing-staff'  — the address is a staff login somewhere: no email
-   *                       about the portal, which that login cannot use
-   * Internal only: the HTTP response is identical in all three cases.
+   *   'created'          — a brand-new login: invite them to set a password
+   *   'existing-pending' — a customer login whose owner never set a password
+   *                        (another seller's invite went unanswered or
+   *                        expired): invite them again — "log in as usual"
+   *                        means nothing to someone who never chose one
+   *   'existing-client'  — an activated customer login: tell them this
+   *                        seller added them; their password is unchanged
+   *   'existing-staff'   — the address is a staff login somewhere: tell them
+   *                        without a portal link, which that login cannot use
+   * Internal only: the HTTP response is identical in every case.
    */
-  login: 'created' | 'existing-client' | 'existing-staff'
+  login: 'created' | 'existing-pending' | 'existing-client' | 'existing-staff'
 }
 
 /**
@@ -73,7 +77,7 @@ export async function provisionClient(
 
     const user = await tx.user.findUniqueOrThrow({
       where: { email: input.email },
-      select: { id: true, email: true, role: true }
+      select: { id: true, email: true, role: true, passwordSetAt: true }
     })
 
     const client = await tx.client.create({
@@ -95,7 +99,13 @@ export async function provisionClient(
       name: client.name,
       organizationName: client.organization.name,
       login:
-        inserted.count === 1 ? 'created' : user.role === 'CLIENT' ? 'existing-client' : 'existing-staff'
+        inserted.count === 1
+          ? 'created'
+          : user.role !== 'CLIENT'
+            ? 'existing-staff'
+            : user.passwordSetAt === null
+              ? 'existing-pending'
+              : 'existing-client'
     }
   })
 }

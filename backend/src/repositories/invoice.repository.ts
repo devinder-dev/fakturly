@@ -413,16 +413,20 @@ export async function markPaidWithin(
   }
 }
 
-/** Stores the Stripe checkout session id on an invoice. */
+/**
+ * Stores the Stripe checkout session id on an invoice. False when no
+ * invoice matched — including another organization's.
+ */
 export async function attachCheckoutSession(
   organizationId: string,
   id: string,
   sessionId: string
-): Promise<void> {
-  await prisma.invoice.updateMany({
+): Promise<boolean> {
+  const updated = await prisma.invoice.updateMany({
     where: { id, organizationId },
     data: { stripePaymentId: sessionId }
   })
+  return updated.count > 0
 }
 
 /** Deletes a DRAFT invoice. Items cascade; see the schema. */
@@ -622,14 +626,18 @@ export async function chargeReminderFee(
   })
 }
 
-/** A repeat reminder: the timestamp moves, no fee is added. */
+/**
+ * A repeat reminder: the timestamp moves, no fee is added. False when no
+ * invoice matched — including another organization's.
+ */
 export async function markReminderSent(
   organizationId: string,
   id: string,
   sentAt: Date
-): Promise<void> {
-  await prisma.invoice.updateMany({
+): Promise<boolean> {
+  const updated = await prisma.invoice.updateMany({
     where: { id, organizationId },
     data: { reminderSentAt: sentAt }
   })
+  return updated.count > 0
 }

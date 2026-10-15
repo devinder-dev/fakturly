@@ -63,12 +63,17 @@ FROM "Client" c WHERE c.id = i."clientId";
 UPDATE "Transaction" t SET "organizationId" = i."organizationId"
 FROM "Invoice" i WHERE i.id = t."invoiceId";
 
--- Audit rows: from the acting user first (still set on every login here),
--- then from the record the event was about, for system events with no user
+-- Audit rows: from the acting user first — STAFF only. A customer's own
+-- events (logging in, setting a password) belong to no organization, which
+-- is exactly how they are written from now on (step 5 takes customer logins
+-- out of their organization). Filing them under the seller here would show
+-- that seller's admin a customer's activity it was never meant to see.
+-- Then from the record the event was about, for system events with no user
 -- (the overdue job, Stripe, the operator scripts). What matches nothing — a
 -- failed login for an unknown address — stays NULL, which is the truth.
 UPDATE "AuditLog" a SET "organizationId" = u."organizationId"
-FROM "User" u WHERE u.id = a."userId" AND a."organizationId" IS NULL;
+FROM "User" u
+WHERE u.id = a."userId" AND u."role" = 'ADMIN' AND a."organizationId" IS NULL;
 
 UPDATE "AuditLog" a SET "organizationId" = i."organizationId"
 FROM "Invoice" i WHERE a."resource" = 'Invoice' AND i.id = a."resourceId" AND a."organizationId" IS NULL;

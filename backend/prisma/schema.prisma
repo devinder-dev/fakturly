@@ -66,6 +66,12 @@ model User {
   failedLogins   Int             @default(0) // räknar misslyckade inloggningar
   lockedUntil    DateTime? // konto låst till denna tidpunkt
 
+  /// When this login's owner last chose a password. NULL = never activated:
+  /// the account exists only because a seller provisioned it, with a random
+  /// password nobody knows. Recorded, not inferred from token rows — the demo
+  /// seed sets passwords without any token, and token rows may be pruned.
+  passwordSetAt  DateTime?
+
   // Staff belong to exactly one organization; a customer's login belongs to
   // NONE — it reaches its sellers through its Client rows, one per seller.
   // A CHECK constraint enforces it: ("role" = 'ADMIN') = ("organizationId" IS
