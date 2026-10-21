@@ -14,7 +14,7 @@ Not a CRUD tutorial — every decision is documented with its reasoning and the 
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev)
 [![CI](https://github.com/devinder-dev/fakturly/actions/workflows/ci.yml/badge.svg)](https://github.com/devinder-dev/fakturly/actions/workflows/ci.yml)
 
-**[📐 Architecture decisions](docs/architecture-decisions.md)** · **[🚀 Deployment](docs/deployment.md)** · **[🎤 How to present it](docs/presentation.md)** · **[📖 Auth walkthrough](docs/auth-phase-walkthrough.md)** · **[🔌 Integrations](docs/integrations.md)**
+**[📐 Architecture decisions](docs/architecture-decisions.md)** · **[🚀 Deployment](docs/deployment.md)** · **[🎤 How to present it](docs/presentation.md)** · **[📖 Auth walkthrough](docs/auth-phase-walkthrough.md)** · **[🔌 Integrations](docs/integrations.md)** · **[🗺️ Roadmap](docs/roadmap.md)**
 
 </div>
 

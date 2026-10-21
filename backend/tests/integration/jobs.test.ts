@@ -20,8 +20,8 @@ import {
   closeQueues,
   defaultJobOptions
 } from '../../src/jobs/queues.ts'
-import { processEmailJob } from '../../src/jobs/workers/email.worker.ts'
-import { redis } from '../helpers.ts'
+import { processEmailJob, startEmailWorker } from '../../src/jobs/workers/email.worker.ts'
+import { redis, uniqueSuffix } from '../helpers.ts'
 import type { Job } from 'bullmq'
 import type { EmailJobData } from '../../src/jobs/queues.ts'
 
@@ -79,7 +79,10 @@ describe('workers can actually be constructed', () => {
     const worker = new Worker(QueueName.EMAIL, async () => ({ ok: true }), {
       connection: bullConnection,
       prefix: QUEUE_PREFIX,
-      concurrency: 1
+      concurrency: 1,
+      // Built, never started: a running worker here would be a competing
+      // consumer and steal jobs from the real-worker test below.
+      autorun: false
     })
     openedWorkers.push(worker)
 
@@ -87,6 +90,42 @@ describe('workers can actually be constructed', () => {
     // A worker on a DIFFERENT prefix would open fine and then sit there
     // processing nothing, silently, forever.
   })
+})
+
+describe('the real email worker receives what the real email queue sends', () => {
+  // The test above builds its OWN worker with the right prefix — so it stayed
+  // green while startEmailWorker() itself had no prefix at all and listened on
+  // BullMQ's default 'bull:' keys. Every overdue notice and reminder went into
+  // 'fakturly:email:*' and was never read. This test uses the production
+  // functions on both ends, so the two can never drift apart unnoticed again.
+  test('🔑 a job added via getEmailQueue() is processed by startEmailWorker()', async () => {
+    // Leftover jobs from other test files would otherwise be processed by
+    // this worker too, and could send real emails for real test invoices.
+    await getEmailQueue().drain()
+
+    const invoiceId = `clnotarealinvoice${uniqueSuffix()}`
+    const worker = startEmailWorker()
+    openedWorkers.push(worker)
+
+    // Listen BEFORE adding, so a fast worker cannot finish first.
+    const completed = new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('startEmailWorker() never picked up the job — prefix mismatch?')),
+        10_000
+      )
+      worker.on('completed', (job, result) => {
+        if (job.data.invoiceId !== invoiceId) return
+        clearTimeout(timer)
+        resolve(result)
+      })
+    })
+
+    await getEmailQueue().add('prefix-regression', { kind: 'overdue-notice', invoiceId })
+
+    // The invoice does not exist, so the job completes as "skipped" — no
+    // email is sent, but it proves the job travelled queue → Redis → worker.
+    expect(await completed).toEqual({ skipped: 'invoice_missing' })
+  }, 15_000)
 })
 
 describe('job options', () => {
